@@ -5,7 +5,7 @@ on:
   pull_request:
     # Filtruje po gałęzi bazowej PR-a (target). Tylko PR do main.
     branches:
-      - main
+      - cw09
     # Tylko otwarcie PR oraz synchronizacja (np. dopchnięcie nowych commitów do gałęzi PR)
     types: [opened, synchronize]
 
