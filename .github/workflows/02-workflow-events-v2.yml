@@ -1,6 +1,7 @@
 name: 02 - Workflow Events v2.2026
 # Wersja rozszerzona — push, pull_request, schedule, workflow_dispatch
 # dumy zmaina dla CW02_03_2026
+#tyeraz bedzie git
 
 on:
   #push:
