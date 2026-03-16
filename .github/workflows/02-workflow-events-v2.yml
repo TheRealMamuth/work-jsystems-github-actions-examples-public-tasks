@@ -18,6 +18,7 @@ jobs:
       - name: Show the trigger
         run: |
           echo "Event name: ${{ github.event_name }}"
+          echo "pull request"
 
 # Commit & push:
 # ```bash
