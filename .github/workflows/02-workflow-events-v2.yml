@@ -9,7 +9,7 @@ on:
     branches:
       - CW02_03_2026
   schedule:
-    - cron: "*/2 * * * *"     # co 2 minuty
+    - cron: "*/2 * * * *"     # co 2 minuty       # co niedzielę o północy
   workflow_dispatch:
 
 jobs:
@@ -20,6 +20,10 @@ jobs:
         run: |
           echo "Event name: ${{ github.event_name }}"
           echo "pull request"
+          ls -la
+          echo "cos tam"
+      - name: test
+        run: echo "$test"
 
 # Commit & push:
 # ```bash
