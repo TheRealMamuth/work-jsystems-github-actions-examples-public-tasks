@@ -4,6 +4,7 @@ on:
   push:
     branches: [ docker ]
   pull_request:
+    #types: [ opened, synchronize, reopened ]
     branches: [ docker ]
   workflow_dispatch:
 
