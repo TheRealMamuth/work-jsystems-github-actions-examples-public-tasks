@@ -13,3 +13,5 @@ jobs:
     steps:
       - name: Echo message
         run: echo "Running whenever a PR is closed."
+
+        #prosta zmiana
