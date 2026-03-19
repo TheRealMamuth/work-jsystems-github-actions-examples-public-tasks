@@ -1,0 +1,109 @@
+name: 11-02-inputs - Build Nginx image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_name:
+        description: "Nazwa obrazu (bez tagu)"
+        type: string
+        required: true
+        default: "demo-nginx"
+
+      app_env:
+        description: "Środowisko aplikacji (wpływa na tag)"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+        default: dev
+
+      build_number:
+        description: "Numer builda (dodawany do tagu)"
+        type: number
+        required: true
+        default: 1
+
+      push_image:
+        description: "Czy wypchnąć obraz do rejestru GHCR?"
+        type: boolean
+        default: false
+
+      deploy_environment:
+        description: "GitHub Environment (np. dev-env, staging-env, prod-env)"
+        type: environment
+        required: true
+
+defaults:
+  run:
+    shell: bash
+    working-directory: ./CWICZENIA/11-inputs
+
+jobs:
+  build-and-optional-push:
+    name: Build Docker image (11-inputs)
+    runs-on: ubuntu-latest
+
+    # Użycie inputu typu `environment`
+    environment: ${{ inputs.deploy_environment }}
+
+    permissions:
+      contents: read
+      packages: write   # wymagane do pushowania do GHCR
+      id-token: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Pokaz wybrane parametry
+        run: |
+          echo "Wybrane parametry uruchomienia:"
+          echo "  image_name      = ${{ inputs.image_name }}"
+          echo "  app_env         = ${{ inputs.app_env }}"
+          echo "  build_number    = ${{ inputs.build_number }}"
+          echo "  push_image      = ${{ inputs.push_image }}"
+          echo "  deploy_environment (GitHub) = ${{ inputs.deploy_environment }}"
+
+      - name: Build Docker image (z użyciem wszystkich inputów)
+        run: |
+          IMAGE_NAME="${{ inputs.image_name }}"
+          APP_ENV="${{ inputs.app_env }}"
+          BUILD_NUMBER="${{ inputs.build_number }}"
+
+          # tag będzie np. dev-1
+          IMAGE_TAG="${APP_ENV}-${BUILD_NUMBER}"
+
+          # owner musi być lowercase dla GHCR!
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+
+          IMAGE_URI="ghcr.io/${OWNER_LOWER}/${IMAGE_NAME}:${IMAGE_TAG}"
+
+          echo "Buduję obraz: ${IMAGE_URI}"
+          echo "Kontekst builda: $(pwd)"
+
+          docker build \
+            --build-arg APP_ENV="${APP_ENV}" \
+            --build-arg BUILD_NUMBER="${BUILD_NUMBER}" \
+            -t "${IMAGE_URI}" .
+
+          echo "Gotowy lokalny obraz: ${IMAGE_URI}"
+
+      - name: Login do GHCR
+        if: ${{ inputs.push_image }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push Docker image (tylko jeśli push_image == true)
+        if: ${{ inputs.push_image }}
+        run: |
+          IMAGE_NAME="${{ inputs.image_name }}"
+          APP_ENV="${{ inputs.app_env }}"
+          BUILD_NUMBER="${{ inputs.build_number }}"
+          IMAGE_TAG="${APP_ENV}-${BUILD_NUMBER}"
+
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_URI="ghcr.io/${OWNER_LOWER}/${IMAGE_NAME}:${IMAGE_TAG}"
+
+          echo "Wypycham obraz: ${IMAGE_URI}"
+          docker push "${IMAGE_URI}"
