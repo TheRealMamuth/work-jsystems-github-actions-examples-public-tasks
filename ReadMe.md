@@ -115,6 +115,8 @@
 6. https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#example-returning-a-json-data-type
 7. https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-jobs-with-conditions
 8. https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#status-check-functions
+9. https://stackoverflow.com/questions/76750973/how-to-execute-a-job-that-needs-a-job-that-was-skipped
+10. https://github.com/actions/runner/issues/1540
 
 ## 11 Inputs
 1. https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onworkflow_callinputs
