@@ -12,9 +12,12 @@ pipeline {
         stage('Budowanie') {
             steps {
                 echo 'Pobieranie kodu'
+                sh '''
+                  exit 1
+                '''
                 echo 'Budowanie aplikacji'
                 sh '''
-                exit 1
+                  exit 1
                 '''
             }
         }
