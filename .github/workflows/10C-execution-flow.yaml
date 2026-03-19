@@ -12,7 +12,7 @@ jobs:
         run: |
           # USTAWIANIE OUTPUTU STEPU zgodnie z nowym API:
           # zapis w formacie klucz=wartość do pliku wskazanego przez $GITHUB_OUTPUT
-          echo "piotrkoska=yes" >> "$GITHUB_OUTPUT"
+          echo "piotrkoska=no" >> "$GITHUB_OUTPUT"
     outputs:
       run_job_b: ${{ steps.set.outputs.piotrkoska }}
   b:
