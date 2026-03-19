@@ -1,0 +1,28 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'CITY', defaultValue: 'Warsaw', description: 'Miasto')
+    }
+
+    environment {
+        API_KEY_W = credentials('API_KEY_W')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scmGit(branches: [[name: '*/main']], extensions: [sparseCheckout([[path: 'CWICZENIA/06-context/pogoda/']])], userRemoteConfigs: [[url: 'https://github.com/TheRealMamuth/work-jsystems-github-actions-examples-public-tasks.git']])
+            }
+        }
+        stage('Check Weather') {
+            steps {
+                sh '''
+                    ls -la
+                    chmod +x ./CWICZENIA/06-context/pogoda/start.sh
+                    ./CWICZENIA/06-context/pogoda/start.sh ${CITY} ${API_KEY_W}
+                '''
+            }
+        }
+    }
+}

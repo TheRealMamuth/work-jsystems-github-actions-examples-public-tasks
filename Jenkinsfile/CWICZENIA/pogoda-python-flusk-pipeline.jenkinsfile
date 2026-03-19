@@ -1,0 +1,125 @@
+pipeline {
+    agent any
+
+    environment {
+        LOCAL_IMAGE_NAME = "python_pogoda:test"
+        WORKDIR = "./CWICZENIA/06-context/pogoda_python_flusk"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build Docker image') {
+            steps {
+                sh '''
+                    docker build -t $LOCAL_IMAGE_NAME $WORKDIR
+                '''
+            }
+        }
+
+        stage('Run container') {
+            steps {
+                withCredentials([string(credentialsId: 'OPENWEATHER_API_KEY', variable: 'API_KEY')]) {
+                    sh '''
+                        docker run -d \
+                          --name pogoda_api \
+                          -p 8000:8000 \
+                          -e OPENWEATHER_API_KEY=$API_KEY \
+                          $LOCAL_IMAGE_NAME
+                    '''
+                }
+            }
+        }
+
+        stage('Wait for API') {
+            steps {
+                sh """
+                    echo "Czekam na start API..."
+                    sleep 10
+                """
+            }
+        }
+
+        stage('Test endpoint /weather') {
+            steps {
+                withCredentials([string(credentialsId: 'OPENWEATHER_API_KEY', variable: 'API_KEY')]) {
+                    sh '''
+                        set -e
+                        echo "Testowanie endpointu /weather..."
+                        curl -f "http://localhost:8000/weather?city=Warsaw&api_key=$API_KEY"
+                        echo
+                        echo "OK - endpoint działa poprawnie."
+                    '''
+                }
+            }
+        }
+
+        stage('Docker Hub Login') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'DOCKERHUB_USERNAME', variable: 'DOCKER_USER'),
+                    string(credentialsId: 'DOCKERHUB_TOKEN', variable: 'DOCKER_PASS')
+                ]) {
+                    sh '''
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                    '''
+                }
+            }
+        }
+
+        stage('Tag image') {
+            steps {
+                script {
+                    def shortSha = env.GIT_COMMIT.take(7)
+                    env.SHORT_SHA = shortSha
+                }
+                withCredentials([string(credentialsId: 'DOCKERHUB_USERNAME', variable: 'DOCKER_USER')]) {
+                    sh '''
+                        HUB_IMAGE_BASE="$DOCKER_USER/python_pogoda"
+
+                        echo "Taguję obraz:"
+                        echo " - $HUB_IMAGE_BASE:latest"
+                        echo " - $HUB_IMAGE_BASE:${SHORT_SHA}"
+
+                        docker tag ${LOCAL_IMAGE_NAME} $HUB_IMAGE_BASE:jenkinsfile
+                        docker tag ${LOCAL_IMAGE_NAME} $HUB_IMAGE_BASE:$SHORT_SHA
+                    '''
+                }
+            }
+        }
+
+        stage('Push image') {
+            steps {
+                withCredentials([string(credentialsId: 'DOCKERHUB_USERNAME', variable: 'DOCKER_USER')]) {
+                    sh '''
+                        HUB_IMAGE_BASE="$DOCKER_USER/python_pogoda"
+
+                        docker push $HUB_IMAGE_BASE:jenkinsfile
+                        docker push $HUB_IMAGE_BASE:$SHORT_SHA
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+                sh """
+                    echo "Logi kontenera:"
+                    docker logs pogoda_api || true
+                """
+        }
+
+        always {
+                sh """
+                    docker stop pogoda_api || true
+                    docker rm pogoda_api || true
+                """
+        }
+    }
+}
