@@ -1,0 +1,33 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('echo-hello') {
+            steps {
+                echo 'Hello, World!'
+            }
+        }
+
+        stage('echo-goodbye') {
+            steps {
+                script {
+                    echo 'I will fail'
+                    sh 'exit 1'
+                }
+                echo 'Goodbye!'
+            }
+        }
+    }
+
+    post {
+        always {
+            echo 'Pipeline zakończony'
+        }
+        success {
+            echo 'Pipeline SUCCESS'
+        }
+        failure {
+            echo 'Pipeline FAILURE'
+        }
+    }
+}

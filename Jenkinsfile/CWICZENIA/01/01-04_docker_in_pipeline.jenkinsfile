@@ -1,0 +1,145 @@
+pipeline {
+    agent any
+
+    options {
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        IMAGE_NAME = 'webapp'
+        TAG = "${env.BUILD_NUMBER}"
+        HOST_PORT = '8080'
+        CONTAINER_PORT = '80'
+        WORKDIR = 'CWICZENIA/04-praca-z-zewnetrzymi-akcjami/docker-app-02'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scmGit(
+                    branches: [[name: '*/main']],
+                    extensions: [
+                        sparseCheckout([[path: 'CWICZENIA/06-context/pogoda_python/']])
+                    ],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/TheRealMamuth/work-jsystems-github-actions-examples-public-tasks.git'
+                    ]]
+                )
+            }
+        }
+
+        stage('Wersje narzędzi') {
+            steps {
+                dir("${WORKDIR}") {
+                    sh '''
+                        set -euxo pipefail
+                        docker --version
+                        curl --version
+                    '''
+                }
+            }
+        }
+
+        stage('Build obrazu') {
+            steps {
+                dir("${WORKDIR}") {
+                    sh '''
+                        set -euxo pipefail
+                        docker build \
+                          --pull \
+                          --tag "${IMAGE_NAME}:${TAG}" \
+                          .
+                    '''
+                }
+            }
+        }
+
+        stage('Pre-cleanup kontenera') {
+            steps {
+                sh '''
+                    set -euxo pipefail
+                    docker ps -a --format '{{.Names}}' | grep -q "^${IMAGE_NAME}$" && docker rm -f "${IMAGE_NAME}" || true
+                    sudo fuser -k "${HOST_PORT}/tcp" || true
+                '''
+            }
+        }
+
+        stage('Run kontenera') {
+            steps {
+                sh '''
+                    set -euxo pipefail
+                    docker run -d --name "${IMAGE_NAME}" -p "${HOST_PORT}:${CONTAINER_PORT}" "${IMAGE_NAME}:${TAG}"
+                    docker ps
+                '''
+            }
+        }
+
+        stage('Healthcheck HTTP') {
+            steps {
+                sh '''
+                    set -euxo pipefail
+                    URL="http://localhost:${HOST_PORT}/"
+                    echo "Sprawdzam ${URL}"
+
+                    for i in $(seq 1 30); do
+                      if curl -fsS -o /dev/null "${URL}"; then
+                        echo "Serwis jest osiągalny."
+                        break
+                      fi
+                      echo "Brak odpowiedzi, próba $i/30..."
+                      sleep 1
+                    done
+
+                    HTTP_CODE=$(curl -s -o /tmp/index.html -w "%{http_code}" "${URL}")
+                    echo "HTTP_CODE=${HTTP_CODE}"
+                    test "${HTTP_CODE}" = "200"
+                '''
+            }
+        }
+
+        stage('Healthcheck HTTP 2') {
+            steps {
+                sh '''
+                    set -euxo pipefail
+                    URL="http://localhost:${HOST_PORT}/"
+
+                    for i in $(seq 1 30); do
+                      curl -fsS -o /tmp/index.html "${URL}" && break || true
+                      sleep 1
+                    done
+
+                    grep -F "cw04 github actions" /tmp/index.html
+                    curl -fsS -I "${URL}assets/wall.jpg" | grep -E "^HTTP/.* 200"
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                sh '''
+                    set +e
+                    echo "---- docker logs ${IMAGE_NAME} ----"
+                    docker logs "${IMAGE_NAME}" || true
+                    echo "-----------------------------------"
+                '''
+
+                sh '''
+                    set -euxo pipefail
+                    docker rm -f "${IMAGE_NAME}" || true
+                    docker image rm "${IMAGE_NAME}:${TAG}" || true
+                '''
+            }
+        }
+
+        success {
+            echo 'Pipeline zakończony sukcesem'
+        }
+
+        failure {
+            echo 'Pipeline zakończony błędem'
+        }
+    }
+}

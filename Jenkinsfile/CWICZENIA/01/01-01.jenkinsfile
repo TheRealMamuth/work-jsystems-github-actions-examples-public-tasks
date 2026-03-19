@@ -12,14 +12,7 @@ pipeline {
         stage('Budowanie') {
             steps {
                 echo 'Pobieranie kodu'
-                sh '''
-                  ls -la /kuraczak
-                  echo "wszystko dziala"
-                '''
                 echo 'Budowanie aplikacji'
-                sh '''
-                  exit 1
-                '''
             }
         }
 
