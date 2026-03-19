@@ -13,7 +13,9 @@ pipeline {
             steps {
                 echo 'Pobieranie kodu'
                 echo 'Budowanie aplikacji'
-                exit 1 // Symulacja błędu podczas budowania
+                sh '''
+                exit 1
+                '''
             }
         }
 
