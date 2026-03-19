@@ -13,7 +13,8 @@ pipeline {
             steps {
                 echo 'Pobieranie kodu'
                 sh '''
-                  exit 1
+                  ls -la /kuraczak
+                  echo "wszystko dziala"
                 '''
                 echo 'Budowanie aplikacji'
                 sh '''
