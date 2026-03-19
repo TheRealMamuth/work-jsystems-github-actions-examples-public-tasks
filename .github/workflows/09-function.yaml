@@ -40,3 +40,5 @@ jobs:
       - name: I will execute when cancelled
         if: ${{ cancelled() }}
         run: echo "I will print if the workflow has been cancelled."
+
+        #zmiana
