@@ -1,0 +1,34 @@
+name: 10D Conditional Job Execution
+on:
+  workflow_dispatch:
+jobs:
+  a:
+    name: a
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "A"
+      # nadajemy ID, by móc odczytać outputs
+      - id: set
+        run: |
+          # USTAWIANIE OUTPUTU STEPU zgodnie z nowym API:
+          # zapis w formacie klucz=wartość do pliku wskazanego przez $GITHUB_OUTPUT
+          echo "run_job_b=no" >> "$GITHUB_OUTPUT"
+    outputs:
+      run_job_b: ${{ steps.set.outputs.run_job_b }}
+  b:
+    name: b
+    runs-on: ubuntu-latest
+    needs:
+      - a
+    if: needs.a.outputs.run_job_b == 'yes'
+    steps:
+      - run: echo "B"
+  c:
+    name: c
+    runs-on: ubuntu-latest
+    needs:
+      - a
+      - b
+    if: needs.b.result == 'success' || needs.b.result == 'skipped'
+    steps:
+      - run: echo "C"
