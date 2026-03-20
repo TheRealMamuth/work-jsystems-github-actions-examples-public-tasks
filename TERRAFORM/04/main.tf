@@ -1,5 +1,5 @@
 resource "digitalocean_droplet" "main" {
-  name   = "${var.droplet_name}-${var.project_environment}"
+  name   = "${var.droplet_name}"
   region = var.droplet_region
   size   = var.droplet_size
   image  = var.droplet_image
