@@ -17,7 +17,7 @@ variable "project_environment" {
 variable "own_ssh_public_key" {
   description = "This is your own SSH public key - this is not secret, but we want to validate it"
   type        = string
-  default     = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8435K6g4GM6CkTTVc+uQ6IAbQolZL/fK2U/ri+ou/L piotrkoska@Piotrs-MacBook-Pro.local"
+  default     = "TUTAJ KLUCZ SSH PUBLICZNY"
 
   validation {
     condition     = can(regex("^ssh-(rsa|ed25519)\\s+[A-Za-z0-9+/]+={0,3}(\\s+.+)?$", var.own_ssh_public_key))
