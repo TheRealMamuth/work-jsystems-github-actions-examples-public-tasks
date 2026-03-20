@@ -17,7 +17,9 @@ jobs:
         run: echo "Say Hello to my little friend" > output.txt
 
       - name: Sleep
-        run: sleep 30
+        run: |
+          sleep 30
+          exit 1
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
