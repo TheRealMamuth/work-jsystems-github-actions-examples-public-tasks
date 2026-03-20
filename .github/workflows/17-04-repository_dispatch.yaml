@@ -14,7 +14,7 @@ jobs:
 
       - name: Trigger repo B
         run: |
-          curl -X POST https://api.github.com/repos/TheRealMamuth/work-jsystems-github-actions-examples-public/dispatches \
+          curl -X POST https://api.github.com/repos/TheRealMamuth/work-jsystems-github-actions-examples-public-tasks/dispatches \
           -H "Accept: application/vnd.github+json" \
           -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
           -d '{
