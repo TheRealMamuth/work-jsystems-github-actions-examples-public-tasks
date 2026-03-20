@@ -380,15 +380,18 @@ jobs:
           echo "Czekam 20 sekund na pełną gotowość dropleta..."
           sleep 20
 
+      - name: Show Ansible inventory (for debug)
+        run: cat inventories/${{ matrix.srodowisko }}/hosts.yaml
+
       - name: Run Ansible playbook - install nginx
-        run: ansible-playbook -i inventories/${{ matrix.environment }}/hosts.yaml install-nginx.yaml --limit ${{ vars.DROPLET_NAME }}
+        run: ansible-playbook -i inventories/${{ matrix.srodowisko }}/hosts.yaml install-nginx.yaml --limit ${{ vars.DROPLET_NAME }}
 
       - name: Run Ansible playbook - deploy app
         run: |
           ansible-galaxy collection install community.docker
 
           ansible-playbook \
-            -i inventories/${{ matrix.environment }}/hosts.yaml \
+            -i inventories/${{ matrix.srodowisko }}/hosts.yaml \
             deploy-app.yml \
             --limit ${{ vars.DROPLET_NAME }} \
             -e "docker_image=${{ env.HUB_IMAGE_BASE }}:ansible-${{ matrix.environment }}" \
@@ -747,6 +750,9 @@ jobs:
           echo "Czekam 20 sekund na pełną gotowość dropleta..."
           sleep 20
 
+      - name: Show Ansible inventory (for debug)
+        run: cat inventories/${{ matrix.srodowisko }}/hosts.yaml
+
       - name: Run Ansible playbook - install nginx
         run: ansible-playbook -i inventories/${{ matrix.srodowisko }}/hosts.yaml install-nginx.yaml --limit ${{ vars.DROPLET_NAME }}
 
@@ -758,5 +764,5 @@ jobs:
             -i inventories/${{ matrix.srodowisko }}/hosts.yaml \
             deploy-app.yml \
             --limit ${{ vars.DROPLET_NAME }} \
-            -e "docker_image=${{ env.HUB_IMAGE_BASE }}:ansible-${{ matrix.srodowisko }}" \
+            -e "docker_image=${{ env.HUB_IMAGE_BASE }}:ansible-${{ matrix.environment }}" \
             -e "openweather_api_key=${{ secrets.OPENWEATHER_API_KEY }}"
