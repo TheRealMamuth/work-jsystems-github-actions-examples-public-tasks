@@ -1,0 +1,103 @@
+name: TF 03 - Simple Terraform Cloud Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      destroy:
+        description: 'Destroy infrastructure after creation'
+        required: false
+        default: 'false'
+
+defaults:
+  run:
+    working-directory: TERRAFORM/01
+
+jobs:
+  terrrform-destroy:
+    name: Terraform Destroy
+    if : ${{ inputs.destroy == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          cli_config_credentials_token: ${{ secrets.TF_CLOUD_CREDENTIALS }}
+
+      - name: Write tfvars from secret
+        shell: bash
+        run: |
+          cat <<EOF > terraform.auto.tfvars
+          ${{ secrets.AUTO_TF_VARS }}
+          EOF
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Destroy
+        if: ${{ inputs.destroy == 'true' }}
+        run: terraform destroy -auto-approve
+
+  terraform-all-in-one:
+    name: Terraform All-in-One
+    if : ${{ inputs.destroy != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          cli_config_credentials_token: ${{ secrets.TF_CLOUD_CREDENTIALS }}
+
+      - name: Write tfvars from secret
+        shell: bash
+        run: |
+          cat <<EOF > terraform.auto.tfvars
+          ${{ secrets.AUTO_TF_VARS }}
+          EOF
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Format Check
+        run: terraform fmt -check
+        continue-on-error: true
+
+      - name: Terraform Plan
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Install Docker
+        uses: docker/setup-buildx-action@v4
+
+      - name: Terraform show
+        id: show
+        run: |
+          terraform show -json tfplan > tfplan.json
+
+      - name: Visualize Terraform plan
+        id: visualize
+        run: |
+          echo ""
+          echo "############################"
+          echo "###  TREE FORMAT - PLAN  ###"
+          echo "############################"
+          echo ""
+          docker run -v $PWD:/workspace -w /workspace ghcr.io/dineshba/tf-summarize -tree tfplan.json
+
+          # summary in separate tree format
+          echo ""
+          echo "###############################"
+          echo "###  TREE S FORMAT - PLAN   ###"
+          echo "###############################"
+          echo ""
+          docker run -v $PWD:/workspace -w /workspace ghcr.io/dineshba/tf-summarize -separate-tree tfplan.json
+
+      - name: Terraform Apply
+        run: terraform apply tfplan
