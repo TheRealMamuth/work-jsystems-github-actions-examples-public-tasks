@@ -24,7 +24,7 @@ resource "digitalocean_project_resources" "main" {
 }
 
 resource "digitalocean_vpc" "main" {
-  name     = "piotr-koska-github-actions-vpc"
+  name     = "piotr2-koska2-github-actions-vpc"
   region   = "fra1"
   ip_range = "10.113.10.0/24" # <- uzjcie sowej sieci
 }
