@@ -13,7 +13,7 @@ defaults:
     working-directory: TERRAFORM/01
 
 jobs:
-  terrrform-destroy:
+  terraform-destroy:
     name: Terraform Destroy
     if : ${{ inputs.destroy == 'true' }}
     runs-on: ubuntu-latest
