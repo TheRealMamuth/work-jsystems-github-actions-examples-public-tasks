@@ -1,0 +1,127 @@
+name: TF 08 - Simple Terraform Cloud Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      destroy:
+        description: 'Destroy infrastructure after creation'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: terraform-infra
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: TERRAFORM/02
+
+jobs:
+  terrrform-destroy:
+    name: Terraform Destroy
+    if: ${{ inputs.destroy == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          cli_config_credentials_token: ${{ secrets.TF_CLOUD_CREDENTIALS }}
+
+      - name: Write tfvars from secret
+        shell: bash
+        run: |
+          cat <<EOF > terraform.auto.tfvars
+          ${{ secrets.AUTO_TF_VARS }}
+          EOF
+
+      - name: Terraform Init
+        run: terraform init
+
+      # PLAN DESTROY (żeby mieć coś do wizualizacji)
+      - name: Terraform Destroy Plan
+        run: terraform plan -destroy -out=tfplan
+
+      - name: Terraform show (destroy)
+        run: terraform show -json tfplan > tfplan.json
+
+      - name: Visualize Terraform destroy plan (HTML)
+        run: |
+          docker run \
+            --user $(id -u):$(id -g) \
+            -v $PWD:/workspace \
+            -w /workspace \
+            ghcr.io/dineshba/tf-summarize \
+            -html -out report.html tfplan.json
+
+          echo "<h2>Terraform Destroy Plan</h2>" >> $GITHUB_STEP_SUMMARY
+          cat report.html >> $GITHUB_STEP_SUMMARY
+
+      - name: Terraform Destroy
+        run: terraform destroy -auto-approve
+
+  terraform-all-in-one:
+    name: Terraform All-in-One
+    if: ${{ inputs.destroy != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          cli_config_credentials_token: ${{ secrets.TF_CLOUD_CREDENTIALS }}
+
+      - name: Write tfvars from secret
+        shell: bash
+        run: |
+          cat <<EOF > terraform.auto.tfvars
+          ${{ secrets.AUTO_TF_VARS }}
+          EOF
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Format Check
+        run: terraform fmt -check
+        continue-on-error: true
+
+      - name: Terraform Plan
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Install Docker
+        uses: docker/setup-buildx-action@v4
+
+      - name: Terraform show
+        id: show
+        run: |
+          terraform show -json tfplan > tfplan.json
+
+      - name: Visualize Terraform plan (HTML)
+        id: visualize
+        run: |
+          docker run \
+            --user $(id -u):$(id -g) \
+            -v $PWD:/workspace \
+            -w /workspace \
+            ghcr.io/dineshba/tf-summarize \
+            -html -out report.html tfplan.json
+
+          echo "<h2>Terraform Plan</h2>" >> $GITHUB_STEP_SUMMARY
+          cat report.html >> $GITHUB_STEP_SUMMARY
+
+      - name: Copy artefacts html
+        uses: actions/upload-artifact@v7
+        with:
+          name: terraform-plan-report
+          path: TERRAFORM/02/report.html
+
+
+      - name: Terraform Apply
+        run: terraform apply tfplan
