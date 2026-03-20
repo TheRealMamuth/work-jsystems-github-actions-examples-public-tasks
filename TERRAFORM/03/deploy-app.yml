@@ -1,0 +1,119 @@
+---
+- name: Deploy aplikacji w Dockerze
+  hosts: all
+  become: true
+
+  vars:
+    container_name: pogoda_api
+    app_port: 8000
+
+  tasks:
+
+    # -------------------------
+    # SYSTEM
+    # -------------------------
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Instaluj zależności
+      apt:
+        name:
+          - ca-certificates
+          - curl
+        state: present
+
+    # -------------------------
+    # CLEANUP (ważne)
+    # -------------------------
+
+    - name: Usuń stare repo Dockera
+      file:
+        path: /etc/apt/sources.list.d/docker.list
+        state: absent
+
+    - name: Usuń stare sources
+      file:
+        path: /etc/apt/sources.list.d/docker.sources
+        state: absent
+
+    # -------------------------
+    # DOCKER (OFICJALNIE 2026)
+    # -------------------------
+
+    - name: Utwórz katalog keyrings
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Pobierz klucz Dockera (ASC - zgodnie z docs)
+      get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+
+    - name: Dodaj repo Dockera (DEB822 - docker.sources)
+      copy:
+        dest: /etc/apt/sources.list.d/docker.sources
+        content: |
+          Types: deb
+          URIs: https://download.docker.com/linux/ubuntu
+          Suites: {{ ansible_facts['distribution_release'] }}
+          Components: stable
+          Signed-By: /etc/apt/keyrings/docker.asc
+
+    - name: Update apt cache po repo
+      apt:
+        update_cache: yes
+
+    # -------------------------
+    # DOCKER INSTALL
+    # -------------------------
+
+    - name: Instaluj Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: Uruchom Docker
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    # -------------------------
+    # DOCKER IMAGE
+    # -------------------------
+
+    - name: Pull obrazu
+      community.docker.docker_image:
+        name: "{{ docker_image }}"
+        source: pull
+
+    # -------------------------
+    # CONTAINER
+    # -------------------------
+
+    - name: Usuń stary kontener
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: absent
+
+    - name: Uruchom kontener
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: "{{ docker_image }}"
+        state: started
+        restart_policy: always
+        recreate: true
+        ports:
+          - "8080:{{ app_port }}"
+        env:
+          OPENWEATHER_API_KEY: "{{ openweather_api_key }}"
