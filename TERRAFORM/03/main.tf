@@ -26,7 +26,7 @@ resource "digitalocean_project_resources" "main" {
 resource "digitalocean_vpc" "main" {
   name     = "piotr2-koska2-github-actions-vpc"
   region   = "fra1"
-  ip_range = "10.113.10.0/24" # <- uzjcie sowej sieci
+  ip_range = "10.77.99.0/24" # <- uzjcie sowej sieci
 }
 
 resource "tls_private_key" "main" {
