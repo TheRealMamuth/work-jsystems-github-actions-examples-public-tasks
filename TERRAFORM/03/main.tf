@@ -10,7 +10,7 @@ resource "digitalocean_droplet" "main" {
 }
 
 resource "digitalocean_project" "main" {
-  name        = "piotr-koska-github-actions-project"
+  name        = "piotr2-koska2-github-actions-project"
   description = "Project for GitHub Actions examples"
   purpose     = "Testing and learning"
   environment = "Development"
