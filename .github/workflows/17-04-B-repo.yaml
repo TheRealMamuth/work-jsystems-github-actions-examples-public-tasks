@@ -1,0 +1,15 @@
+name: Triggered from repo A
+
+on:
+  repository_dispatch:
+    types: [run-from-repo-a]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show data
+        run: |
+          echo "Branch: ${{ github.event.client_payload.branch }}"
+          echo "Version: ${{ github.event.client_payload.version }}"
+          echo "Env: ${{ github.event.client_payload.env }}"

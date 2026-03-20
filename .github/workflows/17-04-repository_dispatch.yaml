@@ -1,0 +1,27 @@
+name: Repository Dispatch from Repo A to Repo B
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Build repo A"
+
+      - name: Debug
+        run: echo "${{ secrets.PAT_TOKEN != '' }}"
+
+      - name: Trigger repo B
+        run: |
+          curl -X POST https://api.github.com/repos/TheRealMamuth/work-jsystems-github-actions-examples-public/dispatches \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
+          -d '{
+            "event_type":"run-from-repo-a",
+            "client_payload": {
+              "branch": "main",
+              "version": "1.2.3",
+              "env": "prod"
+            }
+          }'
