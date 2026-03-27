@@ -1,5 +1,6 @@
 name: 02 - Workflow Events v2.2026
 # Wersja rozszerzona — push, pull_request, schedule, workflow_dispatch
+# dumy zmaina dla CW02_03_2026
 
 on:
   #push:
@@ -18,6 +19,7 @@ jobs:
       - name: Show the trigger
         run: |
           echo "Event name: ${{ github.event_name }}"
+          echo "pull request"
 
 # Commit & push:
 # ```bash
