@@ -5,7 +5,7 @@ on:
 
 jobs:
   ubuntu-echo-01:
-    runs-on: labhost
+    runs-on: lab
     steps:
       - name: Show OS
         shell: bash
@@ -18,7 +18,8 @@ jobs:
           echo "This is a test file." > /home/student/testfile.txt
 
   ubuntu-echo-02:
-    runs-on: labhost
+    needs: ubuntu-echo-01
+    runs-on: lab
     steps:
       - name: Show OS
         shell: bash
