@@ -16,6 +16,7 @@ jobs:
     steps:
       - name: Failed step
         run: |
+          set +e
           echo "I will fail"
           ls -la kaczka
           exit 0  # dowolny kod != 0 spowoduje błąd kroku
