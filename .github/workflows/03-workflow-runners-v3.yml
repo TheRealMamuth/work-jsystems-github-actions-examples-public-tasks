@@ -5,7 +5,7 @@ on:
 
 jobs:
   ubuntu-echo-01:
-    runs-on: ubuntu-latest
+    runs-on: labhost
     steps:
       - name: Show OS
         shell: bash
@@ -15,10 +15,10 @@ jobs:
       - name: Create file
         shell: bash
         run: |
-          echo "This is a test file." > testfile.txt
+          echo "This is a test file." > /home/student/testfile.txt
 
   ubuntu-echo-02:
-    runs-on: ubuntu-latest
+    runs-on: labhost
     steps:
       - name: Show OS
         shell: bash
@@ -29,9 +29,9 @@ jobs:
       - name: Read file
         shell: bash
         run: |
-          if [ -f testfile.txt ]; then
+          if [ -f /home/student/testfile.txt ]; then
             echo "File exists. Contents:"
-            cat testfile.txt
+            cat /home/student/testfile.txt
           else
             echo "File does not exist."
           fi
