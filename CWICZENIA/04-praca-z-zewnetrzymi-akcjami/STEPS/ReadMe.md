@@ -14,7 +14,7 @@
    ```bash
    cd 04-using-actions
    ```
-3. Wygeneruj aplikację React przy pomocy polecenia:
+3. Wygeneruj aplikację React przy pomocy polecenia: (ten katalog juz istnieje wiec musi być to inna nazwa)
    ```bash
    npx create-react-app --template typescript react-app
    ```
