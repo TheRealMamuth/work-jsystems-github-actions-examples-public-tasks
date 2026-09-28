@@ -15,7 +15,7 @@ jobs:
       - name: Create file
         shell: bash
         run: |
-          echo "This is a test file." > /home/student/testfile.txt
+          echo "This is a test file." > ./testfile.txt
 
   ubuntu-echo-02:
     needs: ubuntu-echo-01
@@ -30,9 +30,9 @@ jobs:
       - name: Read file
         shell: bash
         run: |
-          if [ -f /home/student/testfile.txt ]; then
+          if [ -f ./testfile.txt ]; then
             echo "File exists. Contents:"
-            cat /home/student/testfile.txt
+            cat ./testfile.txt
           else
             echo "File does not exist."
           fi
