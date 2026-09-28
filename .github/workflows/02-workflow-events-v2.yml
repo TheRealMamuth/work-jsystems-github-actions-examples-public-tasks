@@ -1,0 +1,32 @@
+name: 02 - Workflow Events v2
+# Wersja rozszerzona — push, pull_request, schedule, workflow_dispatch
+
+on:
+  push:
+  pull_request:
+    branches:
+      - CW_02_2026_09_28
+  schedule:
+    - cron: "0 9 * * *"     # codziennie o 09:00 UTC
+  workflow_dispatch:
+
+jobs:
+  echo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show the trigger
+        run: |
+          echo "Event name: ${{ github.event_name }}"
+
+# Commit & push:
+# ```bash
+# git add .github/workflows/02-workflow-events.yaml
+# git commit -m "Exercise 02: add PR, schedule and manual triggers"
+# git push
+# ```
+
+# Jak przetestować:
+# - pull_request: utwórz nowy branch, zmień coś, otwórz PR → workflow ruszy na pull_request.
+# - schedule: poczekaj na najbliższe okno crona (albo ustaw bliższy czas, np. co godzinę: 0 * * * *).
+# - workflow_dispatch (z UI):
+# Actions → wybierz 02 - Workflow Events → Run workflow.
