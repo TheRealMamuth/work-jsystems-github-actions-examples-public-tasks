@@ -19,7 +19,7 @@ jobs:
           set +e
           echo "I will fail"
           ls -la kaczka
-          exit 0  # dowolny kod != 0 spowoduje błąd kroku
+          exit 1  # dowolny kod != 0 spowoduje błąd kroku
       - name: Say goodbye
         run: echo "Goodbye!"
         # Dodaj inne kroki i zobacz jak zachowuje sie github actions jako osobne joby oraz kroki w tym jobie.
