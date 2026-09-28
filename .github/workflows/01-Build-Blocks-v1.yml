@@ -7,11 +7,13 @@ on:
 jobs:
   echo-hello:
     runs-on: ubuntu-latest
+    name: Say hello
     steps:
       - name: Say hello
         run: echo "Hello, World!"
 
   echo-goodbye:
+    name: Say goodbye
     runs-on: ubuntu-latest
     steps:
       - name: Failed step
@@ -19,7 +21,7 @@ jobs:
           set +e
           echo "I will fail"
           ls -la kaczka
-          exit 1  # dowolny kod != 0 spowoduje błąd kroku
+          exit 0  # dowolny kod != 0 spowoduje błąd kroku
       - name: Say goodbye
         run: echo "Goodbye!"
         # Dodaj inne kroki i zobacz jak zachowuje sie github actions jako osobne joby oraz kroki w tym jobie.
