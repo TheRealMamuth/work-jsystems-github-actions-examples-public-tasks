@@ -3,9 +3,10 @@ set -e
 # Twój klucz API dla OpenWeatherMap
 # zabezpiecz go przed udostępnianiem publicznym
 API_KEY="7cff9972d5c98a9a47ddf6a59cb34d8e"
-#901b2799309f24e7c5d833aacc8c61a4
-#be5e1bb3d471f0b5b6b431b7faa2d79c
 #103e5313b5246366da6edb17f856bb11
+#7cff9972d5c98a9a47ddf6a59cb34d8e
+#be5e1bb3d471f0b5b6b431b7faa2d79c
+#901b2799309f24e7c5d833aacc8c61a4
 
 # Sprawdzenie, czy podano miasto
 if [ -z "$1" ]; then
