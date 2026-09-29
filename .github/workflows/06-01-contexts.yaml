@@ -2,7 +2,7 @@
 # about the how to use contexts in GitHub Actions.
 
 name: 06-01 - Contexts
-# run-name: 06 - Contexts | DEBUG - ${{ runner.os }} - ${{ inputs.debug }}
+#run-name: 06 - Contexts | DEBUG - ${{ runner.os }} - ${{ inputs.debug }}
 run-name: 06-01 - Contexts | DEBUG - ${{ inputs.debug }}
 
 on:
