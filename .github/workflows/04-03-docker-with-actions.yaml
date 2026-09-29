@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   build-test:
-    runs-on: ubuntu-latest
+    runs-on: lab
     defaults:
       run:
         shell: bash
