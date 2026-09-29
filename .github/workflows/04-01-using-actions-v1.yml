@@ -11,9 +11,9 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: CWICZENIA/04-praca-z-zewnetrzymi-akcjami/react-app
+    # defaults:
+    #   run:
+    #     working-directory: CWICZENIA/04-praca-z-zewnetrzymi-akcjami/react-app
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7

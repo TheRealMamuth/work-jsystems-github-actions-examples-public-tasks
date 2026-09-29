@@ -1,0 +1,49 @@
+name: 04-01 - Using Actions - Start App and Browser Test
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+env:
+  CI: 'true'
+
+jobs:
+  browser-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.x'
+          package-manager-cache: false
+      - name: Install Application Dependencies
+        uses: bahmutov/npm-install@v1
+        with:
+          working-directory: CWICZENIA/04-praca-z-zewnetrzymi-akcjami/react-app
+          install-command: npm ci --include=dev
+      - name: Build, Start and Test Application
+        uses: cypress-io/github-action@v7
+        with:
+          working-directory: CWICZENIA/04-praca-z-zewnetrzymi-akcjami/react-app-e2e
+          install-command: npm ci --include=dev
+          build: npm --prefix ../react-app run build
+          # The browser and app run on the same runner; no public hostname is needed.
+          start: npm --prefix ../react-app run preview -- --host 127.0.0.1 --port 18000 --strictPort
+          wait-on: http://127.0.0.1:18000
+          wait-on-timeout: 60
+          browser: electron
+          record: false
+      - name: Upload Browser Test Results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: react-app-browser-test-results
+          path: |
+            CWICZENIA/04-praca-z-zewnetrzymi-akcjami/react-app-e2e/reports/
+            CWICZENIA/04-praca-z-zewnetrzymi-akcjami/react-app-e2e/cypress/screenshots/
+          if-no-files-found: warn
+          retention-days: 7
