@@ -17,8 +17,15 @@ Poniżej znajdziesz **kompletne, krok‑po‑kroku** rozwiązanie z gotowymi fra
 
 2. Wygeneruj aplikację React w katalogu `react-app`:
    ```bash
-   npx create-react-app --template typescript react-app
+   # Node.js 24 LTS
+   node --version
+   npm create vite@9.2.1 react-app -- --template react-ts --no-interactive
+   cd react-app
+   npm install
+   npm run dev
    ```
+
+   Otwórz adres wypisany przez Vite (zwykle http://localhost:5173). Zatrzymaj serwer przez Ctrl+C i pozostań w `react-app`. Wykonaj kroki od punktu 2 z [instrukcji konfiguracji Vite i Vitest](../../REACT_VITE.md) przed przejściem dalej: dodają testy i katalog `build/`. Vite uruchamiaj przez `npm run dev`; szablon nie ma skryptu `start`.
 
 3. Po sukcesie inicjalizacji zajrzyj do struktury projektu:
    ```bash
@@ -33,7 +40,7 @@ Poniżej znajdziesz **kompletne, krok‑po‑kroku** rozwiązanie z gotowymi fra
 
 **Ścieżka pliku:** `.github/workflows/13-caching.yaml`
 
-**Cel:** Uruchomić checkout, ustawienie Node 20.x, instalację zależności, testy, build oraz „pseudo‑deploy” z komunikatem.
+**Cel:** Uruchomić checkout, ustawienie Node 24.x, instalację zależności, testy, build oraz „pseudo‑deploy” z komunikatem.
 
 **YAML:**
 
@@ -57,15 +64,15 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20.x
+          node-version: 24.x
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --include=dev
 
       - name: Testing
         run: npm run test -- --watchAll=false
@@ -96,9 +103,9 @@ jobs:
 
 **Modyfikacje:**
 
-- Dodajemy wejście `node-version` (choice: 18.x, 20.x, 21.x; domyślnie 20.x).
+- Dodajemy wejście `node-version` (choice: 22.x, 24.x; domyślnie 24.x).
 - Krok `Setup Node` korzysta z wartości wejścia.
-- Dodajemy krok **Download cached dependencies** z `actions/cache@v3` (uruchamiany tylko, gdy `use-cache` = true).
+- Dodajemy krok **Download cached dependencies** z `actions/cache@v6` (uruchamiany tylko, gdy `use-cache` = true).
 - `Install dependencies` wykonuje się **tylko**, gdy nie znaleziono trafienia w cache (tj. `cache-hit != 'true'`).
 
 **Zmieniony YAML:**
@@ -117,10 +124,9 @@ on:
         type: choice
         description: Node version
         options:
-          - 18.x
-          - 20.x
-          - 21.x
-        default: 20.x
+          - 22.x
+          - 24.x
+        default: 24.x
 
 jobs:
   build:
@@ -131,17 +137,17 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
 
       - name: Download cached dependencies
         if: ${{ inputs.use-cache == true }}
         id: cache
-        uses: actions/cache@v3
+        uses: actions/cache@v6
         with:
           key: deps-node-modules-${{ hashFiles('13-caching/react-app/package-lock.json') }}
           path: 13-caching/react-app/node_modules
@@ -149,7 +155,7 @@ jobs:
       - name: Install dependencies
         # Wykonujemy npm ci tylko, jeśli cache nie został trafiony
         if: ${{ steps.cache.outputs.cache-hit != 'true' }}
-        run: npm ci
+        run: npm ci --include=dev
 
       - name: Testing
         run: npm run test -- --watchAll=false

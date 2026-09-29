@@ -16,8 +16,16 @@
    ```
 3. Wygeneruj aplikację React przy pomocy polecenia: (ten katalog juz istnieje wiec musi być to inna nazwa)
    ```bash
-   npx create-react-app --template typescript react-app
+   # Node.js 24 LTS
+   node --version
+   npm create vite@9.2.1 react-app -- --template react-ts --no-interactive
+   cd react-app
+   npm install
+   npm run dev
    ```
+
+   Otwórz adres wypisany przez Vite (zwykle http://localhost:5173). Zatrzymaj serwer przez Ctrl+C i pozostań w `react-app`. Wykonaj kroki od punktu 2 z [instrukcji konfiguracji Vite i Vitest](../../REACT_VITE.md) przed przejściem dalej: dodają testy i katalog `build/`. Vite uruchamiaj przez `npm run dev`; szablon nie ma skryptu `start`.
+
 4. Po zakończeniu generowania aplikacji sprawdź, czy pojawił się komunikat o pomyślnym utworzeniu projektu.  
 5. Przejrzyj strukturę plików w katalogu `react-app`, aby zapoznać się z układem projektu.
 
@@ -44,7 +52,7 @@
        runs-on: ubuntu-latest
        steps:
          - name: Checkout Code
-           uses: actions/checkout@v4
+           uses: actions/checkout@v7
 
          - name: Printing Folders
            run: ls -R
@@ -65,14 +73,14 @@
 2. Dodaj nowy krok **Setup Node** po **Checkout Code**:
    ```yaml
    - name: Setup Node
-     uses: actions/setup-node@v4
+     uses: actions/setup-node@v7
      with:
-       node-version: '20.x'
+       node-version: '24.x'
    ```
 3. Dodaj krok **Install Dependencies** po **Setup Node**:
    ```yaml
    - name: Install Dependencies
-     run: npm ci
+     run: npm ci --include=dev
      working-directory: 04-using-actions/react-app
    ```
 4. Zatwierdź i wypchnij zmiany, a następnie przeanalizuj wyniki działania workflow.
@@ -119,15 +127,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20.x'
+          node-version: '24.x'
 
       - name: Install Dependencies
-        run: npm ci
+        run: npm ci --include=dev
         working-directory: 04-using-actions/react-app
 
       - name: Run Unit Tests
@@ -139,8 +147,8 @@ jobs:
 
 ## Dodatkowe uwagi
 
-- **actions/checkout@v4** – służy do pobrania kodu źródłowego repozytorium.  
-- **actions/setup-node@v4** – umożliwia konfigurację środowiska Node.js.  
+- **actions/checkout@v7** – służy do pobrania kodu źródłowego repozytorium.
+- **actions/setup-node@v7** – umożliwia konfigurację środowiska Node.js.
 - **workflow_dispatch** – pozwala ręcznie uruchomić workflow z interfejsu GitHub.  
 - Polecenie `npm ci` instaluje zależności zgodne z plikiem `package-lock.json`.  
 - Polecenie `npm run test` uruchamia testy jednostkowe aplikacji React.

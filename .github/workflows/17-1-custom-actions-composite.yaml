@@ -1,0 +1,47 @@
+name: 17 - 1 - Custom Actions - Composite
+run-name: 17 - 1 - Custom Actions - Composite | env - ${{ inputs.target-env }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      target-env:
+        description: Dependency cache environment
+        type: choice
+        options:
+          - dev
+          - prod
+        default: dev
+
+permissions:
+  contents: read
+
+env:
+  CI: 'true'
+  working-directory: CWICZENIA/17-custom-actions/react-app
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.working-directory }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Node and NPM Dependencies
+        id: setup-deps
+        uses: ./.github/actions/composite-cache-deps
+        with:
+          node-version: '24.x'
+          working-dir: ${{ env.working-directory }}
+          target-env: ${{ inputs.target-env }}
+          # Vite, TypeScript and Vitest are needed even for a production build.
+          include-dev: 'true'
+      - name: Print setup deps output
+        env:
+          INSTALLED_DEPS: ${{ steps.setup-deps.outputs.installed-deps }}
+        run: |
+          echo "Installed dependencies during this run: $INSTALLED_DEPS"
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npm run build

@@ -30,7 +30,7 @@ inputs:
   node-version:
     description: NodeJS version to use
     required: true
-    default: 20.x
+    default: 24.x
   working-dir:
     description: The working directory of the application
     required: false
@@ -40,13 +40,13 @@ runs:
   using: "composite"
   steps:
     - name: Setup NodeJS version ${{ inputs.node-version }}
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v7
       with:
         node-version: ${{ inputs.node-version }}
 
     - name: Cache dependencies
       id: cache
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         key: deps-node-modules-${{ hashFiles(format('{0}/{1}', inputs.working-dir, 'package-lock.json')) }}
         path: ${{ inputs.working-dir }}/node_modules
@@ -55,12 +55,12 @@ runs:
       if: ${{ steps.cache.outputs.cache-hit != 'true' }}
       shell: bash
       working-directory: ${{ inputs.working-dir }}
-      run: npm ci
+      run: npm ci --include=dev
 ```
 
 **Dlaczego takie ustawienia?**
 
-- **`inputs`** — zgodnie z wymaganiami: `node-version` (wymagane, domyślnie `20.x`) oraz `working-dir` (opcjonalne, domyślnie bieżący katalog `"."`).  
+- **`inputs`** — zgodnie z wymaganiami: `node-version` (wymagane, domyślnie `24.x`) oraz `working-dir` (opcjonalne, domyślnie bieżący katalog `"."`).
 - **`runs.using: composite`** — wskazuje, że tworzymy akcję **złożoną**.  
 - **Kroki:**
   - `setup-node` pobiera wersję z wejścia (elastyczne użycie tej samej akcji w wielu workflowach/wersjach Node).
@@ -93,11 +93,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Cache & install deps (app1)
         uses: ./.github/actions/composite-cache-deps
         with:
-          node-version: 20.x
+          node-version: 24.x
           working-dir: apps/app1
       - name: Build
         working-directory: apps/app1
@@ -110,7 +110,7 @@ jobs:
 
 - [ ] Utworzono katalog `.github/actions/composite-cache-deps/`.  
 - [ ] Dodano plik `action.yaml` z definicją **composite action**.  
-- [ ] Zdefiniowano wejścia: `node-version` (required, default `20.x`) i `working-dir` (optional, default `.`).  
+- [ ] Zdefiniowano wejścia: `node-version` (required, default `24.x`) i `working-dir` (optional, default `.`).
 - [ ] Dodano kroki: `setup-node`, `cache` (id: `cache`), `install dependencies` (warunkowo).  
 - [ ] Klucz cache wyliczany z **lokalnego** `package-lock.json` w `working-dir`.  
 - [ ] Zmiany zatwierdzone i wypchnięte do repozytorium.

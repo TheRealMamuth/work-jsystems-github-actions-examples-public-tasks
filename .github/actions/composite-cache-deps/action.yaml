@@ -1,0 +1,77 @@
+name: Cache Node and NPM Dependencies
+description: Install and cache npm dependencies for the selected project and environment.
+
+inputs:
+  node-version:
+    description: Node.js version
+    required: true
+    default: '24.x'
+  working-dir:
+    description: Application directory relative to the repository root
+    required: false
+    default: '.'
+  target-env:
+    description: Dependency environment (dev or prod)
+    required: false
+    default: dev
+  include-dev:
+    description: Keep build and test tools when target-env is prod
+    required: false
+    default: 'false'
+
+outputs:
+  installed-deps:
+    description: Whether npm ci ran instead of restoring an exact cache match
+    value: ${{ steps.install.outputs.installed-deps || 'false' }}
+
+runs:
+  using: composite
+  steps:
+    - name: Select dependency mode
+      id: mode
+      shell: bash
+      working-directory: ${{ inputs.working-dir }}
+      env:
+        TARGET_ENV: ${{ inputs.target-env }}
+        INCLUDE_DEV: ${{ inputs.include-dev }}
+      run: |
+        case "$TARGET_ENV" in
+          dev|prod) ;;
+          *) echo 'target-env must be dev or prod' >&2; exit 1 ;;
+        esac
+        case "$INCLUDE_DEV" in
+          true|false) ;;
+          *) echo 'include-dev must be true or false' >&2; exit 1 ;;
+        esac
+        test -f package-lock.json
+        if [[ "$TARGET_ENV" == prod && "$INCLUDE_DEV" != true ]]; then
+          echo 'dependency-mode=prod' >> "$GITHUB_OUTPUT"
+        else
+          echo 'dependency-mode=dev' >> "$GITHUB_OUTPUT"
+        fi
+    - name: Setup Node
+      id: node
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+        package-manager-cache: false
+    - name: Cache dependencies
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ inputs.working-dir }}/node_modules
+        key: react-deps-v2-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ inputs.target-env }}-${{ steps.mode.outputs.dependency-mode }}-${{ hashFiles(format('{0}/package-lock.json', inputs.working-dir)) }}
+    - name: Install dependencies
+      id: install
+      if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-dir }}
+      env:
+        DEPENDENCY_MODE: ${{ steps.mode.outputs.dependency-mode }}
+      run: |
+        if [[ "$DEPENDENCY_MODE" == prod ]]; then
+          npm ci --omit=dev
+        else
+          npm ci --include=dev
+        fi
+        echo 'installed-deps=true' >> "$GITHUB_OUTPUT"

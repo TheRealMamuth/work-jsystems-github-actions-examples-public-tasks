@@ -12,7 +12,7 @@ This GitHub Actions workflow demonstrates how to use actions within our GitHub A
 
 1. **Checkout Code**: The workflow checks out the code from the repository using the `actions/checkout` action.
 
-2. **Set up Node.js**: The `actions/setup-node` action sets up a Node.js environment with version 20.x. By specifying the `.x` option, we ensure that the latest release of the version 20 will be used.
+2. **Set up Node.js**: The `actions/setup-node` action sets up a Node.js environment with version 24.x. By specifying the `.x` option, we ensure that the latest release of the version 24 will be used.
 
 3. **Install Dependencies**: It installs project dependencies using `npm ci`.
 

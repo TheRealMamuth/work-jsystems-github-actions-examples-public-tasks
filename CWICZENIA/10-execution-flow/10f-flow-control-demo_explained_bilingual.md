@@ -87,7 +87,7 @@ Runs **only** for PR events. This job:
   Steps selectively run per matrix conditions.
 - `defaults.run.working-directory` points commands to the React app path.
 - `strategy.matrix` defines combinations:  
-  `os ∈ {ubuntu-latest, windows-latest}` × `node ∈ {18, 20}`.
+  `os ∈ {ubuntu-latest, windows-latest}` × `node ∈ {22, 24}`.
 
 **Steps:**
 
@@ -95,11 +95,11 @@ Runs **only** for PR events. This job:
 2. Setup Node using matrix value: `node-version: ${ matrix.node }`.
 3. **Install deps** — guarded by `if: ${ matrix.os == 'ubuntu-latest' }`.  
    Skips on Windows; runs `npm ci` on Ubuntu.
-4. **Build** — stricter guard: Linux **and** Node 20.  
-   `if: ${ matrix.os == 'ubuntu-latest' && matrix.node == 20 }` → `npm run build`.
+4. **Build** — stricter guard: Linux **and** Node 24.
+   `if: ${ matrix.os == 'ubuntu-latest' && matrix.node == 24 }` → `npm run build`.
 5. **Artifact placeholder** — Linux‑only; echoes where you’d normally upload artifacts.
 
-**Effect:** The matrix enumerates all pairs, but heavy work executes only on Linux (and build only on Node 20 + Linux).
+**Effect:** The matrix enumerates all pairs, but heavy work executes only on Linux (and build only on Node 24 + Linux).
 
 ---
 
@@ -271,17 +271,17 @@ if: ${ (github.ref == 'refs/heads/main') && (contains(needs.*.result, 'success')
 
 - `runs-on: ubuntu-latest` — runner jobu; warunki na krokach filtrują wykonanie.
 - `defaults.run.working-directory` — katalog aplikacji React.
-- `strategy.matrix` — `os: ubuntu/windows` × `node: 18/20`.
+- `strategy.matrix` — `os: ubuntu/windows` × `node: 22/24`.
 
 **Kroki:**
 
 1. Checkout.
 2. Setup Node z `matrix.node`.
 3. Instalacja zależności **tylko Linux** (`if: matrix.os == 'ubuntu-latest'`) → `npm ci`.
-4. Budowa **tylko Linux + Node 20** (`if: matrix.os == 'ubuntu-latest' && matrix.node == 20`) → `npm run build`.
+4. Budowa **tylko Linux + Node 24** (`if: matrix.os == 'ubuntu-latest' && matrix.node == 24`) → `npm run build`.
 5. Placeholder artefaktu **tylko Linux** (w praktyce użyj `upload-artifact`).
 
-**Efekt:** Macierz się enumeruje, ale ciężkie kroki wykonują się tylko na Linuxie (build: Node 20).
+**Efekt:** Macierz się enumeruje, ale ciężkie kroki wykonują się tylko na Linuxie (build: Node 24).
 
 ---
 

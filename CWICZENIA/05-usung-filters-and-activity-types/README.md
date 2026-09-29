@@ -88,3 +88,7 @@ on:
       - opened
       - synchronize
 ```
+
+## React application
+
+See [React + TypeScript setup and commands](README%20copy.md).

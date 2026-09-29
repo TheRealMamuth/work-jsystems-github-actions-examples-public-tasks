@@ -20,7 +20,7 @@ inputs:
   node-version:
     description: Wersja NodeJS
     required: true
-    default: 20.x
+    default: 24.x
   working-dir:
     description: Katalog roboczy aplikacji
     required: false
@@ -105,12 +105,13 @@ jobs:
         id: setup-deps
         uses: ./.github/actions/composite-cache-deps
         with:
-          node-version: 20.x
+          node-version: 24.x
           working-dir: ${{ env.working-directory }}
           target-env: ${{ inputs['target-env'] }}
 
       - name: Print setup deps output
-        run: echo "Installed dependencies: ${{ steps.setup-deps.outputs.installed-deps }}"
+        run: |
+          echo "Installed dependencies: ${{ steps.setup-deps.outputs.installed-deps }}"
 ```
 
 Uruchom z UI i sprawdź, czy wartość jest `true` (miss → instalacja) albo `false` (hit → brak instalacji).
@@ -226,7 +227,8 @@ jobs:
           debug: ${{ inputs['debug'] }}
 
       - name: Print custom action output
-        run: echo "Updates available: ${{ steps.update-deps.outputs.updates-available }}"
+        run: |
+          echo "Updates available: ${{ steps.update-deps.outputs.updates-available }}"
 ```
 
 ---
@@ -338,7 +340,8 @@ jobs:
           delay: ${{ inputs.delay }}
 
       - name: Print output from ping url
-        run: echo "URL reachable: ${{ steps.ping-url.outputs.url-reachable }}"
+        run: |
+          echo "URL reachable: ${{ steps.ping-url.outputs.url-reachable }}"
 ```
 
 ---
