@@ -13,8 +13,8 @@ on:
         default: "Warsaw"
 
 env:
-  MY_KLUCZYK: '7cff9972d5c98a9a47ddf6a59cb34d8e'
-
+  #MY_KLUCZYK: '7cff9972d5c98a9a47ddf6a59cb34d8e'
+  MY_KLUCZYK: '${{ secrets.MY_KLUCZYK_POGODA }}'
 
 jobs:
   pogoda-info:
@@ -32,4 +32,4 @@ jobs:
           bash ./start.sh "${{ inputs.city }}" "${{ env.MY_KLUCZYK }}" >> $GITHUB_STEP_SUMMARY
       - name: Wyświetl podsumowanie
         run: |
-          echo "Pogoda dla ${{ inputs.city }} została zapisana w podsumowaniu kroku." > $GITHUB_STEP_SUMMARY
+          echo "Pogoda dla ${{ inputs.city }} została zapisana w podsumowaniu kroku." >> $GITHUB_STEP_SUMMARY
