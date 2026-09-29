@@ -16,7 +16,7 @@ jobs:
         working-directory: CWICZENIA/04-praca-z-zewnetrzymi-akcjami/react-app
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
