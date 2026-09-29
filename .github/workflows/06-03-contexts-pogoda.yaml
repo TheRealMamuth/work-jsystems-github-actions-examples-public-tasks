@@ -30,3 +30,6 @@ jobs:
       - name: Sprawdzanie pogody
         run: |
           bash ./start.sh "${{ inputs.city }}" "${{ env.MY_KLUCZYK }}" >> $GITHUB_STEP_SUMMARY
+      - name: Wyświetl podsumowanie
+        run: |
+          echo "Pogoda dla ${{ inputs.city }} została zapisana w podsumowaniu kroku." > $GITHUB_STEP_SUMMARY
