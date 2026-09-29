@@ -1,0 +1,74 @@
+name: "06-05 - Package Pogoda Info Python"
+run-name: 06-05 - Package Python Pogoda dla ${{ inputs.city }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      city:
+        description: "City to get weather info for"
+        type: string
+        default: "Warsaw"
+      release_tag:
+        description: "Tag / wersja releasu (np. v1.0.0)"
+        type: string
+        default: "v0.1.0"
+
+# <<< DODAJ TO >>>
+permissions:
+  contents: write
+# <<< KONIEC DODATKU >>>
+
+env:
+  # Lepiej to przenieść do secrets i używać secrets.MY_KLUCZYK,
+  # ale zostawiam jak u Ciebie, żeby było czytelnie.
+  MY_KLUCZYK: '7cff9972d5c98a9a47ddf6a59cb34d8e'
+
+jobs:
+  pogoda-info:
+    name: Pobierz informacje o pogodzie + build binarki
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: ./CWICZENIA/06-context/pogoda_python
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+
+      - name: Build binary with PyInstaller
+        run: |
+          # Zbuduje binarkę: ./dist/pogoda
+          pyinstaller --onefile start.py --name pogoda
+
+      - name: (Opcjonalnie) Uruchom binarkę i dodaj wynik do podsumowania
+        run: |
+          ./dist/pogoda "${{ inputs.city }}" "${{ env.MY_KLUCZYK }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload binary as artifact (dla wygody)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pogoda-linux-amd64
+          path: ./CWICZENIA/06-context/pogoda_python/dist/pogoda
+
+      - name: Create GitHub Release and upload binary
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          name: "Pogoda binary ${{ inputs.release_tag }}"
+          draft: false
+          prerelease: false
+          files: |
+            ./CWICZENIA/06-context/pogoda_python/dist/pogoda
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
