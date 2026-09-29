@@ -15,6 +15,9 @@ on:
 env:
   MY_WORKFLOW_VAR: 'workflow'
   MY_OVERWRITTEN_VAR: 'workflow'
+  MY_ENV_VAR: vars.MY_VAR
+  MY_ENV_SECRET: ${{ secrets.MY_SECRET_2026 }}
+  MY_ENV_VAR2: 'KLUCZ'
 
 jobs:
   echo-data:
@@ -52,3 +55,8 @@ jobs:
         run: |
           echo "Workflow env: $MY_WORKFLOW_VAR"
           echo "Overwritten env: $MY_OVERWRITTEN_VAR"
+          echo "My ENV VAR: ${{ env.MY_ENV_VAR }}"
+          echo "My ENV SECRET: ${{ env.MY_ENV_SECRET }}"
+          echo "-------"
+          echo "KLUCZ"
+          echo "My ENV VAR2: ${{ env.MY_ENV_VAR2 }}"
