@@ -22,7 +22,7 @@ jobs:
     env:
       IMAGE_NAME: webapp
       TAG: ${{ github.sha }}
-      HOST_PORT: 8080
+      HOST_PORT: 8090
       CONTAINER_PORT: 80
 
     steps:
