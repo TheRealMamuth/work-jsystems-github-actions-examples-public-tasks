@@ -1,0 +1,28 @@
+# See 06-contexts/README.md for more information
+# about the how to use contexts in GitHub Actions.
+
+name: 06-02 - Contexts Show More Info
+run-name: 06-02 - Contexts | Show More Info
+
+on:
+  workflow_dispatch:
+    inputs:
+      debug:
+        type: boolean
+        default: false
+
+env:
+  MY_WORKFLOW_VAR: 'workflow'
+  MY_OVERWRITTEN_VAR: 'workflow'
+
+jobs:
+  echo-data:
+    runs-on: ubuntu-latest
+    env:
+      MY_JOB_VAR: 'job'
+      MY_OVERWRITTEN_VAR: 'job'
+    steps:
+      - name: Display GitHub Context Information
+        run: |
+          env
+          echo "${{ inputs.debug }}"
