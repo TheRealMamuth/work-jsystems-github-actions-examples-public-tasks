@@ -1,0 +1,34 @@
+name: 04-01 - Using Actions - NPM Install Action
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+env:
+  CI: 'true'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: CWICZENIA/04-praca-z-zewnetrzymi-akcjami/react-app
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.x'
+          package-manager-cache: false
+      - name: Install Dependencies
+        uses: bahmutov/npm-install@v1
+        with:
+          # defaults.run.working-directory does not apply to action inputs.
+          working-directory: CWICZENIA/04-praca-z-zewnetrzymi-akcjami/react-app
+          install-command: npm ci --include=dev
+      - name: Run Unit Tests
+        run: npm test
+      - name: Build
+        run: npm run build
