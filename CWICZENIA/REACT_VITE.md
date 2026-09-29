@@ -26,6 +26,8 @@ npm create vite@9.2.1 react-app -- --template react-ts --no-interactive
 cd react-app
 npm install
 npm run dev
+## lub ## __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=lab-pawel-koska.github.jsystems.cloud npm run dev -- --host 0.0.0.0 --port 18000 --strictPort
+## podstaw swoja FQDN
 ```
 
 Otwórz adres wypisany przez Vite, domyślnie http://localhost:5173.
