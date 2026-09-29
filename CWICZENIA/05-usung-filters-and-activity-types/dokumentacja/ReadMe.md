@@ -15,3 +15,8 @@ teraz powinno dziala czyli path ma znaczenie :)
 ### CHANGES 29.09.2026
 
 - update dokumentacji - dodanie informacji o tym, że path ma znaczenie przy filtrach
+
+
+### CHANGES 29.09.2026 CW05_3
+
+- update dokumentacji - dodanie informacji o tym, że path ma znaczenie przy filtrach
