@@ -77,3 +77,4 @@ artefacts/
 __pycache__/
 *.retry
 **/ansible/tests/.work/
+tfplan
