@@ -12,3 +12,24 @@ terraform {
     }
   }
 }
+
+variable "token" {
+  description = "Token API DigitalOcean odczytywany z lokalnego, ignorowanego pliku terraform.tfvars."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "digitalocean_token" {
+  description = "Token API DigitalOcean odczytywany z lokalnego, ignorowanego pliku terraform.tfvars."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+# Token jest przekazywany przez zmienną sensitive z lokalnego terraform.tfvars.
+provider "digitalocean" {
+  token = var.digitalocean_token
+}
+
+provider "random" {}
