@@ -1,0 +1,10 @@
+do_token = ""
+droplet_name = "piotr-koska-droplet"
+droplet_image = "ubuntu-22-04-x64"
+droplet_size = "s-2vcpu-2gb"
+region = "fra1"
+vpc_name = "piotr-koska-vpc"
+#vpc_ip_range = "10.113.0.0/24"
+firewall_name = "piotr-koska-firewall"
+ssh_key_name = "piotr-koska-ssh-key"
+# Przykład 

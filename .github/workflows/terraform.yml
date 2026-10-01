@@ -1,0 +1,39 @@
+name: Terraform Workflow
+
+on:
+  workflow_dispatch:
+
+jobs:
+   terraform:
+    runs-on: lab
+    defaults:
+      run:
+        shell: bash
+        working-directory: ./TERRAFORM/00_githubactions
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.16.4
+
+      - name: Terraform terraform.tfvars
+        run: |
+          cat << EOF > ./terraform.tfvars
+          ${{ secrets.TFVARS }}
+          EOF
+
+
+      - name: Terraform Init
+        run: terraform init -backend-config="conn_str=postgresql://student:XYZ+MiloszKoska@1986@localhost:5432/szkolenie?sslmode=disable"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan -input=false
+
+      - name: Terraform Apply
+        run: terraform apply -input=false tfplan
