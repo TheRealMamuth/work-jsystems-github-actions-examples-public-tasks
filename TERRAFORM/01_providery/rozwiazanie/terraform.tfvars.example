@@ -1,0 +1,4 @@
+# Wpisz token wyłącznie w lokalnym terraform.tfvars (plik ignorowany przez Git).
+# W etapach 01-04 token nie jest potrzebny do operacji lokalnych.
+digitalocean_token = null
+
