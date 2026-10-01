@@ -13,5 +13,5 @@ resource "digitalocean_droplet" "example" {
 resource "digitalocean_vpc" "example" {
   name   = "example-vpc-${random_id.suffix.hex}"
   region = "fra1"
-  ip_range = "10.114.16.0/20"
+  ip_range = "10.114.1.0/24"
 }
