@@ -1,0 +1,378 @@
+name: FULL_DEPLOY - test, image, Terraform and Ansible
+
+on:
+  pull_request:
+    paths:
+      - 'FULL_DEPLOY/**'
+      - '.github/workflows/full-deploy.yml'
+  push:
+    branches: [main]
+    tags: ['v*'] # A strict vX.Y.Z check follows; this glob is not a regex.
+    paths:
+      - 'FULL_DEPLOY/**'
+      - '.github/workflows/full-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Deploy application or permanently destroy selected infrastructure
+        type: choice
+        options: [deploy, destroy]
+        default: deploy
+        required: true
+      cloud:
+        description: Target cloud (none = build only; destroy requires a cloud)
+        type: choice
+        options: [none, aws, digitalocean, both]
+        default: none
+        required: true
+
+permissions:
+  contents: read
+
+# Never interrupt an in-flight Terraform apply, destroy or Ansible deployment.
+concurrency:
+  group: full-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: '1.16.4'
+
+jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    outputs:
+      operation: ${{ steps.meta.outputs.operation }}
+      tag: ${{ steps.meta.outputs.tag }}
+      image: ${{ steps.meta.outputs.image }}
+      registry: ${{ steps.meta.outputs.registry }}
+      server: ${{ steps.meta.outputs.server }}
+      publish: ${{ steps.meta.outputs.publish }}
+      deploy: ${{ steps.meta.outputs.deploy }}
+      clouds: ${{ steps.meta.outputs.clouds }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select operation, clouds and image metadata
+        id: meta
+        env:
+          REGISTRY: ${{ vars.CONTAINER_REGISTRY || 'ghcr' }}
+          DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
+          DEPLOY_CLOUD: ${{ vars.DEPLOY_CLOUD || 'none' }}
+          INPUT_OPERATION: ${{ inputs.operation }}
+          INPUT_CLOUD: ${{ inputs.cloud }}
+        run: python3 FULL_DEPLOY/scripts/metadata.py
+
+  validate:
+    needs: metadata
+    if: needs.metadata.outputs.operation == 'deploy'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            FULL_DEPLOY/requirements*.txt
+            FULL_DEPLOY/ansible/requirements-controller.txt
+      - name: Configure temporary Ansible paths
+        run: |
+          echo "ANSIBLE_LOCAL_TEMP=$RUNNER_TEMP/ansible-tmp" >> "$GITHUB_ENV"
+          echo "ANSIBLE_COLLECTIONS_PATH=$RUNNER_TEMP/collections" >> "$GITHUB_ENV"
+      - name: Install test and Ansible dependencies
+        run: |
+          python -m pip install -r FULL_DEPLOY/requirements-test.txt -r FULL_DEPLOY/ansible/requirements-controller.txt
+          ansible-galaxy collection install -r FULL_DEPLOY/ansible/requirements.yml -p "$ANSIBLE_COLLECTIONS_PATH"
+      - name: Test application behavior and release rules without weather API calls
+        working-directory: FULL_DEPLOY
+        run: python -m pytest -q
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Validate Terraform and run cloud-free plan tests
+        run: |
+          terraform fmt -check -recursive FULL_DEPLOY/terraform
+          for cloud in aws digitalocean; do
+            terraform -chdir="FULL_DEPLOY/terraform/$cloud" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="FULL_DEPLOY/terraform/$cloud" validate
+            terraform -chdir="FULL_DEPLOY/terraform/$cloud" test
+          done
+      - name: Validate Ansible syntax without connecting to any host
+        run: ansible-playbook -i 'app,' FULL_DEPLOY/ansible/site.yml --syntax-check
+
+  image:
+    needs: [metadata, validate]
+    if: needs.metadata.outputs.operation == 'deploy'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_ref: ${{ steps.push.outputs.image_ref }}
+    env:
+      IMAGE: ${{ needs.metadata.outputs.image }}
+      IMAGE_TAG: ${{ needs.metadata.outputs.tag }}
+      TEST_CONTAINER: full-deploy-test-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build and load the image for testing
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./FULL_DEPLOY
+          platforms: linux/amd64
+          load: true
+          push: false
+          pull: true
+          tags: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=full-deploy-amd64
+          cache-to: type=gha,scope=full-deploy-amd64,mode=max
+          provenance: false
+          sbom: false
+      - name: Check packages, non-root execution and runtime HTTP behavior
+        run: |
+          docker run --rm "$IMAGE:$IMAGE_TAG" python -m pip check
+          test "$(docker run --rm "$IMAGE:$IMAGE_TAG" id -u)" = 10001
+          docker run -d --name "$TEST_CONTAINER" \
+            --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --cap-drop ALL --security-opt no-new-privileges \
+            -p 127.0.0.1:18000:8000 "$IMAGE:$IMAGE_TAG"
+          python3 FULL_DEPLOY/scripts/smoke.py http://127.0.0.1:18000
+          for _attempt in {1..30}; do
+            status="$(docker inspect --format '{{.State.Health.Status}}' "$TEST_CONTAINER")"
+            if [[ "$status" == healthy ]]; then break; fi
+            if [[ "$status" == unhealthy ]]; then exit 1; fi
+            sleep 2
+          done
+          test "$status" = healthy
+      - name: Reject fixable HIGH or CRITICAL vulnerabilities in the image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.75.0
+          image-ref: ${{ env.IMAGE }}:${{ env.IMAGE_TAG }}
+          format: table
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+      - name: Authenticate to GHCR
+        if: needs.metadata.outputs.publish == 'true' && needs.metadata.outputs.registry == 'ghcr'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Authenticate to Docker Hub
+        if: needs.metadata.outputs.publish == 'true' && needs.metadata.outputs.registry == 'dockerhub'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Push the exact tested local image and pass its digest to deployment
+        if: needs.metadata.outputs.publish == 'true'
+        id: push
+        run: |
+          docker push "$IMAGE:$IMAGE_TAG"
+          reference="$(docker image inspect "$IMAGE:$IMAGE_TAG" | python3 -c '
+          import json, os, sys
+          refs = json.load(sys.stdin)[0]["RepoDigests"]
+          print(next(ref for ref in refs if ref.removeprefix("docker.io/").startswith(os.environ["IMAGE"] + "@sha256:")))')"
+          test -n "$reference"
+          echo "image_ref=$reference" >> "$GITHUB_OUTPUT"
+          printf 'Published %s:%s as %s\n' "$IMAGE" "$IMAGE_TAG" "$reference" >> "$GITHUB_STEP_SUMMARY"
+      - name: Show test container logs on failure
+        if: failure()
+        run: docker logs "$TEST_CONTAINER" || true
+      - name: Remove test container
+        if: always()
+        run: docker rm -f "$TEST_CONTAINER" || true
+
+  deploy:
+    needs: [metadata, image]
+    if: needs.metadata.outputs.deploy == 'true' && needs.metadata.outputs.publish == 'true'
+    runs-on: lab
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        cloud: ${{ fromJSON(needs.metadata.outputs.clouds) }}
+    environment: full-deploy-${{ matrix.cloud }}
+    concurrency:
+      group: full-deploy-infrastructure-${{ matrix.cloud }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          # The wrapper captures stdout as action outputs; disable it for SSH keys.
+          terraform_wrapper: false
+      - name: Validate deployment secrets
+        env:
+          PG_CONN_STR: ${{ secrets.TF_PG_CONN_STR }}
+          CLOUD: ${{ matrix.cloud }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+        shell: bash
+        run: |
+          test -n "$PG_CONN_STR" || { echo 'Missing TF_PG_CONN_STR' >&2; exit 1; }
+          if [[ "$CLOUD" == aws ]]; then
+            test -n "$AWS_ACCESS_KEY_ID" || { echo 'Missing AWS_ACCESS_KEY_ID' >&2; exit 1; }
+            test -n "$AWS_SECRET_ACCESS_KEY" || { echo 'Missing AWS_SECRET_ACCESS_KEY' >&2; exit 1; }
+          else
+            test -n "$DIGITALOCEAN_TOKEN" || { echo 'Missing DIGITALOCEAN_TOKEN' >&2; exit 1; }
+          fi
+      - name: Authenticate to AWS using access keys
+        if: matrix.cloud == 'aws'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
+          # Ignore ambient role/session settings on the persistent lab runner.
+          translate-env-variables: false
+          unset-current-credentials: true
+          mask-aws-account-id: true
+      - name: Create a private working directory on the persistent lab runner
+        id: temp
+        shell: bash
+        run: |
+          umask 077
+          deploy_temp="$(mktemp -d "$RUNNER_TEMP/full-deploy.XXXXXXXX")"
+          echo "path=$deploy_temp" >> "$GITHUB_OUTPUT"
+      - name: Apply Terraform, read outputs and deploy with Ansible
+        shell: bash
+        env:
+          CLOUD: ${{ matrix.cloud }}
+          DEPLOY_TEMP: ${{ steps.temp.outputs.path }}
+          PG_CONN_STR: ${{ secrets.TF_PG_CONN_STR }}
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+          TF_VAR_name: ${{ vars.DEPLOY_NAME || 'full-deploy' }}
+          TF_VAR_region: ${{ matrix.cloud == 'aws' && (vars.AWS_REGION || 'eu-central-1') || (vars.DO_REGION || 'fra1') }}
+          TF_VAR_instance_type: ${{ vars.AWS_INSTANCE_TYPE || 't3.micro' }}
+          TF_VAR_droplet_size: ${{ vars.DO_DROPLET_SIZE || 's-1vcpu-1gb' }}
+          TF_VAR_app_cidr: ${{ vars.APP_CIDR || '0.0.0.0/0' }}
+          TF_VAR_app_port: ${{ vars.APP_PORT || '80' }}
+          SSH_SOURCE_IP: ${{ vars.SSH_SOURCE_IP }}
+          DEPLOY_IMAGE: ${{ needs.image.outputs.image_ref }}
+          REGISTRY_SERVER: ${{ needs.metadata.outputs.server }}
+          REGISTRY_USERNAME: ${{ needs.metadata.outputs.registry == 'ghcr' && github.actor || secrets.DOCKERHUB_USERNAME }}
+          REGISTRY_TOKEN: ${{ needs.metadata.outputs.registry == 'ghcr' && secrets.GITHUB_TOKEN || (secrets.DOCKERHUB_PULL_TOKEN || secrets.DOCKERHUB_TOKEN) }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: bash FULL_DEPLOY/scripts/deploy.sh
+      - name: Delete local SSH key, inventory, plan, provider data and temporary dependencies
+        if: always() && steps.temp.outputs.path != ''
+        shell: bash
+        env:
+          DEPLOY_TEMP: ${{ steps.temp.outputs.path }}
+        run: |
+          case "$DEPLOY_TEMP" in
+            "$RUNNER_TEMP"/full-deploy.*) rm -rf -- "$DEPLOY_TEMP" ;;
+            *) echo 'Unexpected temporary path; refusing cleanup' >&2; exit 1 ;;
+          esac
+
+  destroy:
+    # Independent of build/test jobs: cleanup must work even if the app cannot build.
+    needs: metadata
+    if: github.event_name == 'workflow_dispatch' && needs.metadata.outputs.operation == 'destroy'
+    runs-on: lab
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        cloud: ${{ fromJSON(needs.metadata.outputs.clouds) }}
+    environment: full-deploy-${{ matrix.cloud }}
+    # Share this group with deploy, including runs started on other refs.
+    concurrency:
+      group: full-deploy-infrastructure-${{ matrix.cloud }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Validate infrastructure secrets
+        env:
+          PG_CONN_STR: ${{ secrets.TF_PG_CONN_STR }}
+          CLOUD: ${{ matrix.cloud }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+        shell: bash
+        run: |
+          test -n "$PG_CONN_STR" || { echo 'Missing TF_PG_CONN_STR' >&2; exit 1; }
+          if [[ "$CLOUD" == aws ]]; then
+            test -n "$AWS_ACCESS_KEY_ID" || { echo 'Missing AWS_ACCESS_KEY_ID' >&2; exit 1; }
+            test -n "$AWS_SECRET_ACCESS_KEY" || { echo 'Missing AWS_SECRET_ACCESS_KEY' >&2; exit 1; }
+          else
+            test -n "$DIGITALOCEAN_TOKEN" || { echo 'Missing DIGITALOCEAN_TOKEN' >&2; exit 1; }
+          fi
+      - name: Authenticate to AWS using access keys
+        if: matrix.cloud == 'aws'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-central-1' }}
+          translate-env-variables: false
+          unset-current-credentials: true
+          mask-aws-account-id: true
+      - name: Create a private working directory on the persistent lab runner
+        id: temp
+        shell: bash
+        run: |
+          umask 077
+          destroy_temp="$(mktemp -d "$RUNNER_TEMP/full-deploy.XXXXXXXX")"
+          echo "path=$destroy_temp" >> "$GITHUB_OUTPUT"
+      - name: Plan and destroy infrastructure from the existing PostgreSQL state
+        shell: bash
+        env:
+          CLOUD: ${{ matrix.cloud }}
+          DEPLOY_TEMP: ${{ steps.temp.outputs.path }}
+          PG_CONN_STR: ${{ secrets.TF_PG_CONN_STR }}
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+          TF_VAR_name: ${{ vars.DEPLOY_NAME || 'full-deploy' }}
+          TF_VAR_region: ${{ matrix.cloud == 'aws' && (vars.AWS_REGION || 'eu-central-1') || (vars.DO_REGION || 'fra1') }}
+          TF_VAR_instance_type: ${{ vars.AWS_INSTANCE_TYPE || 't3.micro' }}
+          TF_VAR_droplet_size: ${{ vars.DO_DROPLET_SIZE || 's-1vcpu-1gb' }}
+          TF_VAR_app_cidr: ${{ vars.APP_CIDR || '0.0.0.0/0' }}
+          TF_VAR_app_port: ${{ vars.APP_PORT || '80' }}
+        run: bash FULL_DEPLOY/scripts/destroy.sh
+      - name: Delete the local destroy plan and provider data
+        if: always() && steps.temp.outputs.path != ''
+        shell: bash
+        env:
+          DEPLOY_TEMP: ${{ steps.temp.outputs.path }}
+        run: |
+          case "$DEPLOY_TEMP" in
+            "$RUNNER_TEMP"/full-deploy.*) rm -rf -- "$DEPLOY_TEMP" ;;
+            *) echo 'Unexpected temporary path; refusing cleanup' >&2; exit 1 ;;
+          esac

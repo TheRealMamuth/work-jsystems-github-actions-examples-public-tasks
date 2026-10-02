@@ -1,0 +1,2 @@
+# Connection string is read from PG_CONN_STR, never stored here.
+schema_name = "full_deploy_digitalocean"

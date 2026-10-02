@@ -1,0 +1,5 @@
+name     = "full-deploy"
+region   = "fra1"
+ssh_cidr = "203.0.113.10/32" # Replace with your current public IPv4.
+app_cidr = "0.0.0.0/0"
+app_port = 80

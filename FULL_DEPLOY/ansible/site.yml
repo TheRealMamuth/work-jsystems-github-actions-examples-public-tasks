@@ -1,0 +1,137 @@
+---
+- name: Install and deploy the tested application image
+  hosts: app
+  become: true
+  gather_facts: false
+  vars:
+    app_image: "{{ lookup('ansible.builtin.env', 'DEPLOY_IMAGE') }}"
+    registry_server: "{{ lookup('ansible.builtin.env', 'REGISTRY_SERVER') }}"
+    registry_username: "{{ lookup('ansible.builtin.env', 'REGISTRY_USERNAME') }}"
+    registry_token: "{{ lookup('ansible.builtin.env', 'REGISTRY_TOKEN') }}"
+    weather_api_key: "{{ lookup('ansible.builtin.env', 'OPENWEATHER_API_KEY') }}"
+
+  pre_tasks:
+    - name: Require an immutable image reference
+      ansible.builtin.assert:
+        that:
+          - app_image is match('^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$')
+        fail_msg: DEPLOY_IMAGE must contain the registry digest of the tested image.
+
+    - name: Validate credentials without displaying them
+      ansible.builtin.assert:
+        that:
+          - registry_server in ['ghcr.io', 'docker.io']
+          - registry_username | length > 0
+          - registry_token | length > 0
+          - "'\n' not in weather_api_key"
+          - "'\r' not in weather_api_key"
+      no_log: true
+
+    - name: Wait for SSH and Python
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+        sleep: 10
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      timeout: 600
+
+    - name: Gather host facts
+      ansible.builtin.setup:
+
+    - name: Require Ubuntu 24.04
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == 'Ubuntu'
+          - ansible_facts.distribution_version == '24.04'
+
+  tasks:
+    - name: Install Docker and the remote module dependencies
+      ansible.builtin.apt:
+        name: [docker.io, python3-requests]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+        lock_timeout: 300
+
+    - name: Start Docker and enable it after reboot
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Create application directory
+      ansible.builtin.file:
+        path: /opt/full-deploy
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Write runtime application configuration
+      ansible.builtin.copy:
+        dest: /opt/full-deploy/app.env
+        content: "OPENWEATHER_API_KEY={{ weather_api_key }}\n"
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    - name: Create a temporary registry authentication directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: full-deploy-registry-
+      register: registry_auth
+
+    - name: Pull and start the application
+      block:
+        - name: Authenticate to the registry for this deployment
+          community.docker.docker_login:
+            registry_url: "{{ registry_server }}"
+            username: "{{ registry_username }}"
+            password: "{{ registry_token }}"
+            config_path: "{{ registry_auth.path }}/config.json"
+            reauthorize: true
+          no_log: true
+
+        - name: Run the exact tested digest and wait for its health check
+          community.docker.docker_container:
+            name: full-deploy
+            image: "{{ app_image }}"
+            state: healthy
+            healthy_wait_timeout: 180
+            pull: missing
+            restart_policy: unless-stopped
+            published_ports:
+              - "0.0.0.0:{{ app_port }}:8000"
+            env_file: /opt/full-deploy/app.env
+            read_only: true
+            tmpfs:
+              - /tmp:rw,noexec,nosuid,size=64m
+            cap_drop: [ALL]
+            security_opts: [no-new-privileges:true]
+            memory: 512M
+            log_driver: json-file
+            log_options:
+              max-size: 10m
+              max-file: '3'
+          environment:
+            DOCKER_CONFIG: "{{ registry_auth.path }}"
+          no_log: true
+
+        - name: Verify HTTP on the VM
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ app_port }}/health"
+            return_content: true
+          register: health
+          until: health.status == 200 and health.json.status == 'ok'
+          retries: 10
+          delay: 3
+      always:
+        - name: Remove temporary registry credentials
+          ansible.builtin.file:
+            path: "{{ registry_auth.path }}"
+            state: absent
+          no_log: true

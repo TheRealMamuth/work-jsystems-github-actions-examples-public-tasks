@@ -1,0 +1,16 @@
+.pytest_cache/
+.terraform/
+.ansible/
+.venv/
+__pycache__/
+backend.hcl
+backend.tfbackend
+inventory.json
+known_hosts
+id_*
+*.pem
+*.tfstate*
+*.tfplan
+*.tfvars
+*.tfvars.json
+.env*
