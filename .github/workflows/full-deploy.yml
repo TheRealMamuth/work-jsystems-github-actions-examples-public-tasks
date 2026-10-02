@@ -114,7 +114,9 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image_ref: ${{ steps.push.outputs.image_ref }}
+      # The repository namespace can match a masked Docker Hub username.
+      # Transfer only the digest from this authenticated job.
+      image_digest: ${{ steps.push.outputs.image_digest }}
     env:
       IMAGE: ${{ needs.metadata.outputs.image }}
       IMAGE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -185,13 +187,9 @@ jobs:
         id: push
         run: |
           docker push "$IMAGE:$IMAGE_TAG"
-          reference="$(docker image inspect "$IMAGE:$IMAGE_TAG" | python3 -c '
-          import json, os, sys
-          refs = json.load(sys.stdin)[0]["RepoDigests"]
-          print(next(ref for ref in refs if ref.removeprefix("docker.io/").startswith(os.environ["IMAGE"] + "@sha256:")))')"
-          test -n "$reference"
-          echo "image_ref=$reference" >> "$GITHUB_OUTPUT"
-          printf 'Published %s:%s as %s\n' "$IMAGE" "$IMAGE_TAG" "$reference" >> "$GITHUB_STEP_SUMMARY"
+          digest="$(docker image inspect "$IMAGE:$IMAGE_TAG" | python3 FULL_DEPLOY/scripts/image_digest.py "$IMAGE")"
+          echo "image_digest=$digest" >> "$GITHUB_OUTPUT"
+          printf 'Published %s:%s as %s@%s\n' "$IMAGE" "$IMAGE_TAG" "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
       - name: Show test container logs on failure
         if: failure()
         run: docker logs "$TEST_CONTAINER" || true
@@ -276,7 +274,7 @@ jobs:
           TF_VAR_app_cidr: ${{ vars.APP_CIDR || '0.0.0.0/0' }}
           TF_VAR_app_port: ${{ vars.APP_PORT || '80' }}
           SSH_SOURCE_IP: ${{ vars.SSH_SOURCE_IP }}
-          DEPLOY_IMAGE: ${{ needs.image.outputs.image_ref }}
+          DEPLOY_IMAGE: ${{ format('{0}@{1}', needs.metadata.outputs.image, needs.image.outputs.image_digest) }}
           REGISTRY_SERVER: ${{ needs.metadata.outputs.server }}
           REGISTRY_USERNAME: ${{ needs.metadata.outputs.registry == 'ghcr' && github.actor || secrets.DOCKERHUB_USERNAME }}
           REGISTRY_TOKEN: ${{ needs.metadata.outputs.registry == 'ghcr' && secrets.GITHUB_TOKEN || (secrets.DOCKERHUB_PULL_TOKEN || secrets.DOCKERHUB_TOKEN) }}

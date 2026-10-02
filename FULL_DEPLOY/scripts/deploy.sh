@@ -7,6 +7,12 @@ umask 077
 : "${DEPLOY_TEMP:?Set a private temporary directory}"
 : "${PG_CONN_STR:?Configure the TF_PG_CONN_STR GitHub secret}"
 : "${DEPLOY_IMAGE:?Expected an image pinned by digest}"
+# Validate before any Terraform or cloud operation, including when a job output
+# was missing and the workflow reconstructed an incomplete reference such as image@.
+if ! [[ "$DEPLOY_IMAGE" =~ ^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$ ]]; then
+  echo 'DEPLOY_IMAGE must be image@sha256:<64 lowercase hex characters>; check the image job output' >&2
+  exit 1
+fi
 : "${REGISTRY_USERNAME:?Registry username is required}"
 : "${REGISTRY_TOKEN:?Registry token is required}"
 case "$CLOUD" in
