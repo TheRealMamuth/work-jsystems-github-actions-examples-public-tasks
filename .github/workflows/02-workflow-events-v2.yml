@@ -5,7 +5,7 @@ on:
   #push:
   pull_request:
     branches:
-      - CW_02_2026_09_28
+      - CW_02_2026_*
   schedule:
     - cron: "0 9 * * *"     # codziennie o 09:00 UTC
   workflow_dispatch:
