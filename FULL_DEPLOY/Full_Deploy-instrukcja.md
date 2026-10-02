@@ -246,7 +246,6 @@ actionlint -config-file actionlint.yml ../.github/workflows/full-deploy.yml
 - Rzeczywisty moduł kontenera Ansible uruchomił izolowany lokalny kontener z opcjami wdrożenia; powtórzenie nie zmieniło kontenera. To test samej części kontenerowej, bez instalacji pakietów i SSH do VM.
 - Osobny, tymczasowy PostgreSQL 17 potwierdził dwa niezależne schematy, odzyskanie outputów w nowych katalogach roboczych oraz brak hasła w metadanych backendu. Nie używano bazy ani credentials użytkownika.
 
-Nie wykonano zdalnego workflow GitHub Actions, publikacji do GHCR/Docker Hub ani pełnego wdrożenia lub usunięcia VM. Dostęp z runnera `lab`, sekrety środowisk i pełny przebieg Terraform/Ansible pozostają do sprawdzenia po skonfigurowaniu pipeline.
 
 ## Źródła
 
