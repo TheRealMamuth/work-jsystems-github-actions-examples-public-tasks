@@ -1,0 +1,23 @@
+name: 01 - Building Blocks v1
+
+on:
+  #push:
+  workflow_dispatch:
+
+jobs:
+  echo-hello:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Say hello
+        run: echo "Hello, World!"
+
+  echo-goodbye:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Failed step
+        run: |
+          echo "I will fail"
+          exit 1  # dowolny kod != 0 spowoduje błąd kroku
+      - name: Say goodbye
+        run: echo "Goodbye!"
+        # Dodaj inne kroki i zobacz jak zachowuje sie github actions jako osobne joby oraz kroki w tym jobie.
