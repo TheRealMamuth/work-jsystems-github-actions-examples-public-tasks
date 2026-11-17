@@ -1,0 +1,32 @@
+# See 06-contexts/README.md for more information
+# about the how to use contexts in GitHub Actions.
+
+name: "06-03 - Pogoda Info"
+run-name: 06-03 - Pogoda Pogoda dla ${{ inputs.city }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      city:
+        description: "City to get weather info for"
+        type: string
+        default: "Warsaw"
+
+env:
+  MY_KLUCZYK: '7cff9972d5c98a9a47ddf6a59cb34d8e'
+
+
+jobs:
+  pogoda-info:
+    name: Pobierz informacje o pogodzie
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: ./CWICZENIA/06-context/pogoda
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Sprawdzanie pogody
+        run: |
+          bash ./start.sh "${{ inputs.city }}" "${{ env.MY_KLUCZYK }}" >> $GITHUB_STEP_SUMMARY
