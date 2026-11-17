@@ -1,0 +1,27 @@
+#cloud-config
+
+apt_update: true
+
+users:
+  - name: ${cloud_init_user}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    password: ${cloud_init_pass}
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH8435K6g4GM6CkTTVc+uQ6IAbQolZL/fK2U/ri+ou/L piotrkoska@Piotrs-MacBook-Pro.local
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPqJbTloxJzN1TkpT1jWHAVlO+ou4pnVUOqOupIXVzQy windows@DESKTOP-DHEACL1
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBforqcPA8awOte2fDd9q/KcKx2+5U2y6umPG+r9yzpB DM-ed25519-piotr-koska
+
+chpasswd:
+  list: |
+    ${cloud_init_user}:${cloud_init_pass}
+  expire: False
+
+ssh_pwauth: True
+
+runcmd:
+  ### OK ### Aktualizacja listy pakietów ##### ===============================================================================================================================================
+  - apt update
+  ### OK ### Instalacja dodatkowych pakietów #####
+  - apt install -y nginx

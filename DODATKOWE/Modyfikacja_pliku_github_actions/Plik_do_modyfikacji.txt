@@ -1,0 +1,5 @@
+
+Aplikacja = testowa
+Autor = Piotr Koska
+Identyfikator = 0
+IdentyfikatorSHA = 
