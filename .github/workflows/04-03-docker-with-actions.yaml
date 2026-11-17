@@ -1,0 +1,134 @@
+name: 04 - Docker Web CI - with actions
+
+on:
+  push:
+    branches: [ docker ]
+  pull_request:
+    branches: [ docker ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: CWICZENIA/04-praca-z-zewnetrzymi-akcjami/docker-app-02
+
+    env:
+      IMAGE_NAME: webapp
+      TAG: ${{ github.sha }}
+      HOST_PORT: 8080
+      CONTAINER_PORT: 80
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ env.TAG }}
+
+      # Build lokalny + załadowanie obrazu do demona Dockera na runnerze
+      - name: Build image (local)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}/CWICZENIA/04-praca-z-zewnetrzymi-akcjami/docker-app-02
+          push: false
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ env.TAG }}
+
+      # Uruchomienie kontenera przez Docker Compose (w tle)
+      - name: Compose up
+        uses: isbang/compose-action@v2
+        with:
+          compose-file: ${{ github.workspace }}/CWICZENIA/04-praca-z-zewnetrzymi-akcjami/docker-app-02/docker-compose.yml
+          down-flags: --volumes --remove-orphans
+          # 'isbang/compose-action' udostępnia: up, down, pull, build itd.
+          # Domyślne zachowanie to 'up -d' jeżeli nie podamy 'services'
+          # (więc poniższe step-y zakładają, że usługą jest 'webapp') 
+          # W razie potrzeby można jawnie: 'commands: up -d --build'
+          # ale w v1 działa 'up -d' implicit.
+
+      # Czekaj aż serwis zacznie odpowiadać (retry, bez 'run')
+      - name: URL Health Check
+        uses: jtalk/url-health-check-action@v3
+        with:
+          url: http://localhost:${{ env.HOST_PORT }}/
+          max-attempts: 30
+          retry-delay: 1s
+          follow-redirect: false
+
+      # Pobierz stronę główną
+      - name: GET /
+        id: page
+        uses: Satak/webrequest-action@v1.2.4
+        with:
+          url: http://localhost:${{ env.HOST_PORT }}/
+          method: GET
+
+      # Asercja: strona zawiera "cw04 github actions"
+      - name: Assert page contains expected text
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `${{ steps.page.outputs.output }}`;
+            if (!body.includes('cw04 github actions')) {
+              core.setFailed('Strona nie zawiera oczekiwanego napisu: "cw04 github actions".');
+            }
+
+      # Pobierz obrazek
+      - name: GET /assets/wall.jpg
+        id: img
+        uses: fjogeleit/http-request-action@v1
+        with:
+          url: http://localhost:${{ env.HOST_PORT }}/assets/wall.jpg
+          method: GET
+          timeout: 30000
+
+      # Asercja: status 200 oraz prosty check nagłówków
+      - name: Assert image 200
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = Number(`${{ steps.img.outputs.status }}`);
+            if (status !== 200) {
+              core.setFailed(`Obrazek nie jest dostępny (HTTP ${status}).`);
+            }
+            const headers = `${{ steps.img.outputs.headers }}`.toLowerCase();
+            if (!headers.includes('image') && !headers.includes('jpeg') && !headers.includes('jpg')) {
+              core.warning('Content-Type nie wygląda na obrazek JPEG.');
+            }
+
+      # Logi kontenera (zawsze) - bez 'run', przez github-script (node child_process)
+      - name: Docker logs (always)
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execSync } = require('node:child_process');
+            try {
+              const out = execSync('docker logs webapp', { encoding: 'utf8' });
+              core.info('---- docker logs webapp ----\n' + out + '\n-----------------------------');
+            } catch (e) {
+              core.warning('Nie udało się pobrać logów kontenera: ' + e.message);
+            }
+
+      # Sprzątanie: compose down (zawsze)
+      - name: Compose down (always)
+        if: always()
+        uses: isbang/compose-action@v2
+        with:
+          compose-file: ${{ github.workspace }}/CWICZENIA/04-praca-z-zewnetrzymi-akcjami/docker-app-02/docker-compose.yml
+          commands: down --volumes --remove-orphans
