@@ -1,0 +1,17 @@
+name: 05 - 1 - Event Filters and Activity Types
+
+on:
+  workflow_dispatch:
+  pull_request:
+    # Filtruje po gałęzi bazowej PR-a (target). Tylko PR do main.
+    branches:
+      - CW05
+    # Tylko otwarcie PR oraz synchronizacja (np. dopchnięcie nowych commitów do gałęzi PR)
+    types: [opened, synchronize]
+
+jobs:
+  echo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo message
+        run: echo "Running whenever a PR is opened or synchronized AND base branch is main."

@@ -1,0 +1,40 @@
+# .github/workflows/ci.yml
+name: 05 - CI for "05-usung-filters-and-activity-types"
+
+on:
+  push:
+    branches: [ CW05 ]
+    paths-ignore:
+      - '05-usung-filters-and-activity-types/dokumentacja/**'
+  pull_request:
+    branches: [ CW05 ]
+    paths-ignore:
+      - '05-usung-filters-and-activity-types/dokumentacja/**'
+  # opcjonalnie: ręczne odpalenie
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: CWICZENIA/05-usung-filters-and-activity-types/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- przykładowe kroki - podmień na własne ---
+      - name: Ustal wersję Node (przykład)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalacja zależności
+        run: npm ci
+
+      - name: Testy
+        run: npm test -- --ci
