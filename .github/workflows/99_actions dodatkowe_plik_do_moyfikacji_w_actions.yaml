@@ -1,0 +1,85 @@
+name: 99D actions dodatkowe plik do modyfikacji w actions
+
+on:
+  push:
+    branches:
+      - main
+    # Push zmieniający wyłącznie ten plik nie uruchamia tego workflow.
+    paths-ignore:
+      - DODATKOWE/Modyfikacja_pliku_github_actions/Plik_do_modyfikacji.txt
+
+# Wbudowany GITHUB_TOKEN potrzebuje uprawnienia do zapisania commita.
+permissions:
+  contents: write
+
+# Tylko jedno uruchomienie tego workflow może jednocześnie zapisywać plik.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update-file:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TARGET_FILE: DODATKOWE/Modyfikacja_pliku_github_actions/Plik_do_modyfikacji.txt
+
+    steps:
+      - name: Pobierz gałąź main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # Bez PAT: push przez GITHUB_TOKEN nie wyzwala kolejnych workflow push.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Zaktualizuj istniejące wiersze z numerem buildu i SHA
+        shell: bash
+        run: |
+          # GITHUB_RUN_NUMBER rośnie dla każdego nowego uruchomienia workflow.
+          # Ponowienie tego samego uruchomienia zachowuje ten sam numer.
+          # SHA pochodzi z commita, który uruchomił workflow.
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path(os.environ["TARGET_FILE"])
+          content = path.read_text(encoding="utf-8")
+          updates = {
+              "Identyfikator": os.environ["GITHUB_RUN_NUMBER"],
+              "IdentyfikatorSHA": os.environ["GITHUB_SHA"][:7],
+          }
+          for key, value in updates.items():
+              content, count = re.subn(
+                  rf"^{key}[ \t]*=[^\r\n]*",
+                  f"{key} = {value}",
+                  content,
+                  flags=re.MULTILINE,
+              )
+              if count != 1:
+                  raise SystemExit(f"Oczekiwano dokładnie jednego wiersza {key}, znaleziono: {count}")
+          # Zapis dopiero po sprawdzeniu obu wierszy; bez dopisywania nowych.
+          path.write_text(content, encoding="utf-8")
+          PY
+          git diff -- "$TARGET_FILE"
+
+      - name: Zapisz commit i wyślij go do main
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Do commita trafia tylko wskazany plik.
+          git add -- "$TARGET_FILE"
+          if git diff --cached --quiet -- "$TARGET_FILE"; then
+            echo "Numer buildu i SHA już mają te wartości — nie ma zmian do zapisania."
+            exit 0
+          fi
+
+          git commit -m "chore: aktualizacja identyfikatora do build ${GITHUB_RUN_NUMBER}"
+
+          # Uwzględnij zmiany dodane do main w trakcie działania workflow.
+          # Konflikt przerywa operację; nie stosujemy force push.
+          git pull --rebase origin main
+          git push origin HEAD:main
