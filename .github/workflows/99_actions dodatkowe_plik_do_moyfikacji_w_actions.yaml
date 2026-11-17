@@ -1,12 +1,12 @@
 name: 99D actions dodatkowe plik do modyfikacji w actions
 
 on:
-  push:
-    branches:
-      - main
-    # Push zmieniający wyłącznie ten plik nie uruchamia tego workflow.
-    paths-ignore:
-      - DODATKOWE/Modyfikacja_pliku_github_actions/Plik_do_modyfikacji.txt
+  # push:
+  #   branches:
+  #     - main
+  #   # Push zmieniający wyłącznie ten plik nie uruchamia tego workflow.
+  #   paths-ignore:
+  #     - DODATKOWE/Modyfikacja_pliku_github_actions/Plik_do_modyfikacji.txt
 
 # Wbudowany GITHUB_TOKEN potrzebuje uprawnienia do zapisania commita.
 permissions:
