@@ -1,0 +1,73 @@
+name: 08-02 Vars · Inputs · Env — Override Demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      DEMO_VAR:
+        description: "Opcjonalne wejście (inputs) do przysłonięcia wartości z vars"
+        required: false
+        default: "from_input_default"
+
+# Poziom WORKFLOW — startujemy od wartości z VARS
+# (to NIE zmienia vars; tylko wstrzykuje ją do env na poziomie workflow)
+env:
+  DEMO_VAR: ${{ vars.DEMO_VAR }}
+
+jobs:
+  # JOB A: Brak job-level env — widać 'workflow env' bazujące na vars
+  A_workflow_env_from_vars:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1) Baseline — workflow env pochodzi z vars
+        run: |
+          echo "vars.DEMO_VAR = ${{ vars.DEMO_VAR }}"
+          echo "env  DEMO_VAR = $DEMO_VAR"
+
+      - name: 2) STEP override — przysłonięcie tylko w tym kroku
+        env:
+          DEMO_VAR: "from_step_env_A"
+        run: |
+          echo "vars.DEMO_VAR = ${{ vars.DEMO_VAR }}"
+          echo "env  DEMO_VAR = $DEMO_VAR"
+
+      - name: 3) Powrót do wartości z poziomu workflow (po kroku 2)
+        run: |
+          echo "vars.DEMO_VAR = ${{ vars.DEMO_VAR }}"
+          echo "env  DEMO_VAR = $DEMO_VAR"
+
+  # JOB B: Job-level env ustawione z INPUTS (jeśli podasz) — przysłania workflow/env (a pośrednio vars)
+  B_job_env_from_inputs:
+    runs-on: ubuntu-latest
+    # Poziom JOB — tu robimy override całego joba na bazie inputs
+    # Jeśli nie podasz wejścia przy dispatchu, zostanie default z definicji inputs.
+    env:
+      DEMO_VAR: ${{ inputs.DEMO_VAR }}
+    steps:
+      - name: 1) Job-level override — wartość z inputs
+        run: |
+          echo "vars.DEMO_VAR = ${{ vars.DEMO_VAR }}"
+          echo "env  DEMO_VAR = $DEMO_VAR"
+
+      - name: 2) STEP override — jeszcze wyższy priorytet w danym kroku
+        env:
+          DEMO_VAR: "from_step_env_B"
+        run: |
+          echo "vars.DEMO_VAR = ${{ vars.DEMO_VAR }}"
+          echo "env  DEMO_VAR = $DEMO_VAR"
+
+      - name: 3) Po kroku 2 wracamy do job-level env (inputs)
+        run: |
+          echo "vars.DEMO_VAR = ${{ vars.DEMO_VAR }}"
+          echo "env  DEMO_VAR = $DEMO_VAR"
+
+  # JOB C: Pokazanie mieszania — inputs MA PIERWSZEŃSTWO gdy świadomie użyjesz go w wyrażeniu
+  C_mix_vars_inputs_fallback:
+    runs-on: ubuntu-latest
+    # Częsty wzorzec: "weź inputs jeśli podano, w przeciwnym razie weź vars"
+    env:
+      DEMO_VAR: ${{ inputs.DEMO_VAR || vars.DEMO_VAR }}
+    steps:
+      - name: 1) Mix — inputs > vars (jeśli podane)
+        run: |
+          echo "vars.DEMO_VAR = ${{ vars.DEMO_VAR }}"
+          echo "env  DEMO_VAR = $DEMO_VAR"
