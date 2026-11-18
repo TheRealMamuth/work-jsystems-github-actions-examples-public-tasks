@@ -1,0 +1,267 @@
+name: 08-04 Pogoda API — Variables
+
+on:
+  push:
+    branches: [main, feature/06-pogoda-api]
+  pull_request:
+    branches: [feature/06-pogoda-api]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+# Konfiguracja: Settings → Secrets and variables → Actions → Variables.
+# Dodaj osobne Repository variables z wartościami podanymi w komentarzach.
+# TWOJ_LOGIN_DOCKERHUB zastąp loginem konta mającego dostęp do obrazu.
+# DOCKERHUB_USERNAME to nazwa konta; token uwierzytelniający jest osobnym sekretem.
+# Dane poufne ustaw w Settings → Secrets and variables → Actions → Secrets:
+# DOCKERHUB_TOKEN — Twój token dostępu Docker Hub z prawem publikacji obrazu.
+# OPENWEATHER_API_KEY — Twój klucz API OpenWeatherMap.
+# Oba są odczytywane przez secrets.*, bez zapisywania ich wartości w tym pliku.
+env:
+  WORKDIR: ${{ vars.WORKDIR || './CWICZENIA/08-variables/pogoda_python_flusk' }} 
+  DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || 'piotrskoska' }} # TWOJ_LOGIN_DOCKERHUB
+  DOCKER_IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME || 'python_pogoda' }} # python_pogoda
+  # Te dwie wartości są składane automatycznie; nie twórz dla nich Repository variables.
+  TEST_IMAGE: ${{ vars.DOCKERHUB_USERNAME || 'piotrskoska' }}/${{ vars.DOCKER_IMAGE_NAME || 'python_pogoda' }}
+  HUB_IMAGE_BASE: ${{ vars.DOCKERHUB_USERNAME || 'piotrskoska' }}/${{ vars.DOCKER_IMAGE_NAME || 'python_pogoda' }}
+  DOCKERHUB_TAG: ${{ vars.DOCKERHUB_TAG || 'cw08' }} # cw08
+  DOCKER_PORT_EXTERNAL: ${{ vars.DOCKER_PORT_EXTERNAL || '18008' }} # 18008
+  DEPLOY_CONTAINER_NAME: ${{ vars.DEPLOY_CONTAINER_NAME || 'pogoda_api_variables_deploy' }} # pogoda_api_variables_deploy
+  WEATHER_CITY: ${{ vars.WEATHER_CITY || 'Warsaw' }} # Warsaw
+  DEPLOY_BRANCH: ${{ vars.DEPLOY_BRANCH || 'main' }} # feature/06-pogoda-api
+  CONFIG_SCOPE: workflow
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate build configuration
+        run: |
+          for variable in WORKDIR DOCKERHUB_USERNAME DOCKER_IMAGE_NAME DOCKERHUB_TAG DEPLOY_BRANCH; do
+            if [ -z "${!variable}" ]; then
+              echo "::error::Brak wymaganej Repository variable: $variable"
+              exit 1
+            fi
+          done
+
+      - name: Print workflow variable scope
+        run: echo "CONFIG_SCOPE=$CONFIG_SCOPE"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build local test image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.WORKDIR }}
+          tags: ${{ env.TEST_IMAGE }}:${{ env.DOCKERHUB_TAG }}
+          load: true
+          push: false
+
+      - name: Save image to tar
+        run: docker save "${TEST_IMAGE}:${DOCKERHUB_TAG}" -o image.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pogoda-variables-image
+          path: image.tar
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pogoda-variables-image
+
+      - name: Load Docker image
+        run: docker load -i image.tar
+
+      - name: Run test container
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          if [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "::error::Brak sekretu OPENWEATHER_API_KEY."
+            exit 1
+          fi
+          docker run -d \
+            --name pogoda_api_variables_test \
+            -p 127.0.0.1:8000:8000 \
+            -e OPENWEATHER_API_KEY \
+            "${TEST_IMAGE}:${DOCKERHUB_TAG}"
+
+      - name: Wait for test API to be ready
+        run: |
+          curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 \
+            --retry-max-time 60 --max-time 5 \
+            --output /dev/null \
+            http://127.0.0.1:8000/openapi.json
+
+      - name: Test /weather endpoint via curl
+        run: |
+          echo "Testowanie endpointu /weather dla miasta: $WEATHER_CITY"
+          curl --fail --silent --show-error --max-time 30 \
+            --get --data-urlencode "city=$WEATHER_CITY" \
+            http://127.0.0.1:8000/weather
+          echo
+          echo "OK - endpoint /weather odpowiada."
+
+      - name: Show test container logs on failure
+        if: failure()
+        run: docker logs pogoda_api_variables_test || true
+
+      - name: Remove test container
+        if: always()
+        run: docker rm --force pogoda_api_variables_test || true
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: test
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.ref_name == vars.DEPLOY_BRANCH
+    outputs:
+      image_digest: ${{ steps.publish.outputs.digest }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image to Docker Hub
+        id: publish
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.WORKDIR }}
+          push: true
+          tags: |
+            ${{ env.TEST_IMAGE }}:${{ env.DOCKERHUB_TAG }}
+            ${{ env.TEST_IMAGE }}:${{ github.sha }}
+
+  deploy:
+    runs-on: [self-hosted, linux]
+    needs: build-and-push
+    timeout-minutes: 5
+    concurrency:
+      group: pogoda-api-variables-deploy
+      cancel-in-progress: false
+    env:
+      IMAGE_DIGEST: ${{ needs.build-and-push.outputs.image_digest }}
+      CONFIG_SCOPE: job
+
+    steps:
+      - name: Validate deployment configuration
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          for variable in WORKDIR DOCKERHUB_USERNAME DOCKER_IMAGE_NAME DOCKERHUB_TAG DOCKER_PORT_EXTERNAL DEPLOY_CONTAINER_NAME WEATHER_CITY IMAGE_DIGEST; do
+            if [ -z "${!variable}" ]; then
+              echo "::error::Brak wymaganej konfiguracji: $variable"
+              exit 1
+            fi
+          done
+
+          if ! [[ "$DEPLOY_CONTAINER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
+            echo "::error::Nazwa kontenera musi zaczynać się literą lub cyfrą i zawierać tylko litery, cyfry, _ oraz -."
+            exit 1
+          fi
+
+          if ! [[ "$DOCKER_PORT_EXTERNAL" =~ ^[1-9][0-9]{0,4}$ ]] || (( DOCKER_PORT_EXTERNAL > 65535 )); then
+            echo "::error::DOCKER_PORT_EXTERNAL musi być liczbą od 1 do 65535."
+            exit 1
+          fi
+
+          if [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "::error::Brak sekretu OPENWEATHER_API_KEY."
+            exit 1
+          fi
+
+          echo "Obraz: $HUB_IMAGE_BASE"
+          echo "Tag: $DOCKERHUB_TAG"
+          echo "Port: $DOCKER_PORT_EXTERNAL"
+          echo "Kontener: $DEPLOY_CONTAINER_NAME"
+          echo "Miasto: $WEATHER_CITY"
+
+      - name: Print step variable scope
+        env:
+          CONFIG_SCOPE: step
+        run: echo "CONFIG_SCOPE=$CONFIG_SCOPE"
+
+      - name: Print job variable scope
+        run: echo "CONFIG_SCOPE=$CONFIG_SCOPE"
+
+      - name: Prepare API URL for subsequent steps
+        run: echo "API_BASE_URL=http://127.0.0.1:${DOCKER_PORT_EXTERNAL}" >> "$GITHUB_ENV"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull published image from Docker Hub
+        run: docker pull "${HUB_IMAGE_BASE}@${IMAGE_DIGEST}"
+
+      - name: Remove previous deployment container if it exists
+        run: |
+          # Nazwa została zweryfikowana przed użyciem w filtrze regex.
+          existing_container="$(docker container ls --all --quiet --filter "name=^/${DEPLOY_CONTAINER_NAME}$")"
+          if [ -n "$existing_container" ]; then
+            docker rm --force "$existing_container"
+          fi
+
+      - name: Run published container
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          docker run -d \
+            --name "$DEPLOY_CONTAINER_NAME" \
+            --restart unless-stopped \
+            -p "${DOCKER_PORT_EXTERNAL}:8000" \
+            -e OPENWEATHER_API_KEY \
+            "${HUB_IMAGE_BASE}@${IMAGE_DIGEST}"
+
+      - name: Verify deployed API is ready
+        run: |
+          curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 \
+            --retry-max-time 60 --max-time 5 \
+            --output /dev/null \
+            "$API_BASE_URL/openapi.json"
+          test "$(docker inspect --format '{{.State.Running}}' "$DEPLOY_CONTAINER_NAME")" = true
+          echo "Kontener działa, a API jest gotowe."
+
+      - name: Test deployed /weather endpoint via curl
+        run: |
+          echo "Testowanie wdrożonego endpointu /weather dla miasta: $WEATHER_CITY"
+          curl --fail --silent --show-error --max-time 30 \
+            --get --data-urlencode "city=$WEATHER_CITY" \
+            "$API_BASE_URL/weather"
+          echo
+          echo "OK - wdrożony endpoint /weather odpowiada."
+
+      - name: Show deployed container logs on failure
+        if: failure()
+        run: docker logs "$DEPLOY_CONTAINER_NAME" || true
