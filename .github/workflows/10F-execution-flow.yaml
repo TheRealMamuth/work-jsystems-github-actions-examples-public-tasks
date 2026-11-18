@@ -1,0 +1,200 @@
+name: 10F Example - Flow Control Demo
+
+on:
+  push:
+    branches:
+      - CW10
+      - release/*
+    paths-ignore:
+      - "docs/**"
+  pull_request:
+    branches:
+      - "CW10"
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: "Wymuś deploy (true/false)"
+        default: "false"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  # ---------------------------------------
+  # 1) PREP: uruchamia się tylko na PR-ach
+  # ---------------------------------------
+  prep:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    outputs:
+      should_run_e2e: ${{ steps.decide.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ustal strategię testów (PR vs push)
+        id: decide
+        run: |
+          # Prosty warunek: e2e tylko dla PR-ów do main
+          if [[ "${{ github.base_ref }}" == "main" ]]; then
+            echo "e2e=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "e2e=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Loguj konteksty (debug)
+        if: ${{ always() }}
+        run: |
+          echo "event: ${{ github.event_name }}"
+          echo "base_ref: ${{ github.base_ref }}"
+          echo "should_run_e2e: ${{ steps.decide.outputs.e2e }}"
+
+  # --------------------------------------------------
+  # 2) BUILD: zawsze (PR/push), ale tylko na Linuxie
+  #    (matrix z warunkiem na krokach)
+  # --------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: CWICZENIA/04-praca-z-zewnetrzymi-akcjami/react-app
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [18, 20]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Instalacja zależności (tylko Linux)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: npm ci
+
+      - name: Buduj (tylko Node 20 + Linux)
+        if: ${{ matrix.os == 'ubuntu-latest' && matrix.node == 20 }}
+        run: npm run build
+
+      - name: Artefakt (tylko Linux)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: |
+          echo "Tu zwykle: upload-artifact"
+
+  # -------------------------------------------------------
+  # 3) UNIT TESTS: zależne od zadań build (AND po needs)
+  # -------------------------------------------------------
+  unit:
+    needs: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: CWICZENIA/04-praca-z-zewnetrzymi-akcjami/react-app
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - name: Testy jednostkowe
+        run: npm test
+
+  # ------------------------------------------------------------------
+  # 4) SECURITY: może się “pominąć” na PR-ach z gałęzi feature/*
+  # ------------------------------------------------------------------
+  security:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ !startsWith(github.head_ref || github.ref_name, 'feature/') }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skan zależności (przykładowy)
+        run: echo "Tu np. npm audit / trivy / osv-scanner"
+
+  # -------------------------------------------------------------------
+  # 5) E2E: start tylko jeśli prep zasugerował e2e=true (outputs + if)
+  # -------------------------------------------------------------------
+  e2e:
+    needs: [prep, build]
+    defaults:
+      run:
+        working-directory: CWICZENIA/04-praca-z-zewnetrzymi-akcjami/react-app
+    if: ${{ needs.prep.outputs.should_run_e2e == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci
+      - name: Uruchom E2E
+        run: npm run e2e
+
+  # --------------------------------------------------------------------------------
+  # 6) OR-symulacja: gate_po_testach startuje, jeśli (unit LUB e2e) == success,
+  #    oraz żaden wymagany poprzednik nie był failure. (needs.*.result)
+  # --------------------------------------------------------------------------------
+  gate_po_testach:
+    needs: [unit, e2e]
+    runs-on: ubuntu-latest
+    if: ${{ contains(needs.*.result, 'success') && !contains(needs.*.result, 'failure') }}
+    steps:
+      - run: echo "Co najmniej jeden zestaw testów OK (unit/e2e)."
+
+  # -------------------------------------------------------------------------------------
+  # 7) RELEASE-GATE: klasyczne AND — wymagamy i unit, i security (oba success).
+  # -------------------------------------------------------------------------------------
+  release_gate:
+    needs: [unit, security]
+    runs-on: ubuntu-latest
+    if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
+    outputs:
+      can_release: "true"
+    steps:
+      - run: echo "Wszystko zielone (unit + security). Można iść dalej."
+
+  # ------------------------------------------------------------------------------------------------
+  # 8) DEPLOY: tylko na main, tylko jeśli gate_po_testach LUB release_gate dają zielone,
+  #    albo użytkownik wymusił deploy wejściem workflow_dispatch.
+  # ------------------------------------------------------------------------------------------------
+  deploy:
+    needs: [gate_po_testach, release_gate]
+    runs-on: ubuntu-latest
+    if: >
+      ${{
+        (github.ref == 'refs/heads/main') &&
+        (
+          contains(needs.*.result, 'success') || inputs.force_deploy == 'true'
+        )
+      }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy
+        run: |
+          echo "./scripts/deploy.sh"
+      - name: Post-deploy weryfikacja
+        if: ${{ success() }}
+        run: |
+          echo "./scripts/post_deploy_check.sh"
+      - name: Cleanup (zawsze)
+        if: ${{ always() }}
+        run: |
+          echo "./scripts/cleanup.sh"
+
+  # -----------------------------------------------------------------------------------------
+  # 9) RAPORT: zawsze — zbieramy statusy poprzedników, nawet gdy run został anulowany/padł.
+  # -----------------------------------------------------------------------------------------
+  report:
+    needs: [prep, build, unit, security, e2e, gate_po_testach, release_gate, deploy]
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    steps:
+      - name: Podsumowanie wyników
+        run: |
+          echo "prep:              ${{ needs.prep.result }}"
+          echo "build:             ${{ needs.build.result }}"
+          echo "unit:              ${{ needs.unit.result }}"
+          echo "security:          ${{ needs.security.result }}"
+          echo "e2e:               ${{ needs.e2e.result }}"
+          echo "gate_po_testach:   ${{ needs.gate_po_testach.result }}"
+          echo "release_gate:      ${{ needs.release_gate.result }}"
+          echo "deploy:            ${{ needs.deploy.result }}"
