@@ -1,0 +1,204 @@
+# Reużywany deploy aplikacji z gotowego obrazu Docker Hub, wywoływany przez workflow_call.
+# Caller przekazuje inputs przez with oraz jawnie mapuje secrets.
+# Wymagane Repository secrets: DOCKERHUB_TOKEN, OPENWEATHER_API_KEY.
+# Login pochodzi z Repository variable DOCKERHUB_USERNAME (np. piotrskoska).
+# Klucz API trafia do docker run -e, nigdy do obrazu ani outputs.
+# Self-hosted Linux: runner >= 2.327.1 (Node.js 24), Docker, python3, curl, wolny port.
+# Instrukcja: CWICZENIA/17A-Cwiczenia-pipeline-gha/README.md.
+
+name: 17A Reusable — Docker deploy
+
+on:
+  workflow_call:
+    inputs:
+      app_dir:
+        description: Katalog aplikacji z gotowym tests/smoke_test.py
+        type: string
+        required: false
+        default: ./CWICZENIA/17A-Cwiczenia-pipeline-gha/pogoda_python_flusk
+      image_reference:
+        description: Pełny obraz Docker Hub z digestem, login/obraz@sha256:...
+        type: string
+        required: true
+      container_name:
+        description: Stała nazwa cw17a-REPOSITORY_ID-imie-nazwisko-prod
+        type: string
+        required: true
+      app_port:
+        description: Wolny port hosta, od 1024 do 65535
+        # Zgodny typ z workflow_dispatch; walidacja Bash odrzuca niepoprawne porty.
+        type: string
+        required: false
+        default: '18817'
+      weather_city:
+        description: Miasto do prawdziwego testu WWW/API
+        type: string
+        required: false
+        default: Warsaw
+      dockerhub_username:
+        description: Login Docker Hub, przekazany przez caller z vars.DOCKERHUB_USERNAME
+        type: string
+        required: true
+    secrets:
+      DOCKERHUB_TOKEN:
+        description: Token Docker Hub z prawem pobrania obrazu
+        required: true
+      OPENWEATHER_API_KEY:
+        description: Aktywny klucz OpenWeatherMap, wyłącznie do uruchomienia kontenera
+        required: true
+    outputs:
+      app_url:
+        description: URL potwierdzony testami na hoście self-hosted (loopback hosta deploya)
+        value: ${{ jobs.deploy.outputs.app_url }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 15
+    # Ten sam kontener jest zastępowany kolejno, bez równoległych docker rm/run.
+    concurrency:
+      group: cw17a-container-${{ inputs.container_name }}
+      cancel-in-progress: false
+    outputs:
+      app_url: ${{ steps.verify.outputs.app_url }}
+    env:
+      APP_DIR: ${{ inputs.app_dir }}
+      IMAGE_REFERENCE: ${{ inputs.image_reference }}
+      CONTAINER_NAME: ${{ inputs.container_name }}
+      APP_PORT: ${{ inputs.app_port }}
+      WEATHER_CITY: ${{ inputs.weather_city }}
+      DOCKERHUB_USERNAME: ${{ inputs.dockerhub_username }}
+    steps:
+      - name: Checkout the provided application test
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate deployment inputs and credentials before changing the container
+        id: validate
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$DOCKERHUB_USERNAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+            echo "::error::Przekaż poprawny dockerhub_username z vars.DOCKERHUB_USERNAME."
+            exit 1
+          fi
+          image_pattern="^${DOCKERHUB_USERNAME}/[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}$"
+          if ! [[ "$IMAGE_REFERENCE" =~ $image_pattern ]]; then
+            echo "::error::image_reference musi wskazywać obraz Docker Hub po pełnym digescie SHA256."
+            exit 1
+          fi
+          container_pattern="^cw17a-${GITHUB_REPOSITORY_ID}-[a-z]+(-[a-z]+)*-prod$"
+          if ! [[ "$CONTAINER_NAME" =~ $container_pattern ]]; then
+            echo "::error::Nazwa kontenera musi mieć postać cw17a-REPOSITORY_ID-imie-nazwisko-prod."
+            exit 1
+          fi
+          if ! [[ "$APP_PORT" =~ ^[1-9][0-9]{0,4}$ ]] ||
+             [ "$APP_PORT" -lt 1024 ] || [ "$APP_PORT" -gt 65535 ]; then
+            echo "::error::Port musi być liczbą całkowitą od 1024 do 65535."
+            exit 1
+          fi
+          if [ -z "${WEATHER_CITY//[[:space:]]/}" ] || [ "${#WEATHER_CITY}" -gt 100 ] ||
+             [[ "$WEATHER_CITY" =~ [[:cntrl:]] ]]; then
+            echo "::error::Podaj miasto w jednej linii, od 1 do 100 znaków."
+            exit 1
+          fi
+          if ! [[ "$APP_DIR" =~ ^[A-Za-z0-9_./-]+$ ]] ||
+             [[ "$APP_DIR" == /* || "/${APP_DIR#./}/" == *'/../'* ]]; then
+            echo "::error::app_dir musi być ścieżką względną wewnątrz repozytorium."
+            exit 1
+          fi
+          test -f "${APP_DIR}/tests/smoke_test.py"
+          if [ -z "$DOCKERHUB_TOKEN" ] || [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "::error::Przekaż secrets DOCKERHUB_TOKEN i OPENWEATHER_API_KEY do reusable workflow."
+            exit 1
+          fi
+          command -v docker
+          command -v python3
+          command -v curl
+          docker info >/dev/null
+
+      - name: Prepare isolated Docker Hub credentials
+        run: |
+          task_docker_config="$(mktemp -d "${RUNNER_TEMP}/cw17a-docker-config.XXXXXX")"
+          chmod 700 "$task_docker_config"
+          echo "DOCKER_CONFIG=$task_docker_config" >> "$GITHUB_ENV"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ inputs.dockerhub_username }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          logout: false
+
+      - name: Pull the published digest before replacing any container
+        run: docker pull "$IMAGE_REFERENCE"
+
+      - name: Remove only the previous container with the exact same name
+        run: |
+          existing_container="$(docker container ls --all --quiet --filter "name=^/${CONTAINER_NAME}$")"
+          if [ -n "$existing_container" ]; then
+            docker rm --force "$existing_container"
+          fi
+
+      - name: Run the persistent application with the API key at runtime
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          docker run -d --name "$CONTAINER_NAME" --restart unless-stopped \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            -p "${APP_PORT}:8080" -e OPENWEATHER_API_KEY "$IMAGE_REFERENCE"
+
+      - name: Wait for the deployed container
+        id: ready
+        run: |
+          base_url="http://127.0.0.1:${APP_PORT}"
+          curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 \
+            --retry-max-time 60 --max-time 5 \
+            --output /dev/null "${base_url}/healthz"
+          test "$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME")" = true
+          echo "base_url=$base_url" >> "$GITHUB_OUTPUT"
+
+      - name: Verify WWW and real weather API, then expose the URL
+        id: verify
+        env:
+          BASE_URL: ${{ steps.ready.outputs.base_url }}
+        run: |
+          python3 "${APP_DIR}/tests/smoke_test.py" \
+            --base-url "$BASE_URL" --city "$WEATHER_CITY"
+          echo "app_url=$BASE_URL" >> "$GITHUB_OUTPUT"
+          {
+            echo "### CW17A — trwały deploy sprawdzony"
+            echo ""
+            echo "- Obraz: $IMAGE_REFERENCE"
+            echo "- Kontener: $CONTAINER_NAME"
+            echo "- Sprawdzony adres na runnerze: $BASE_URL"
+            echo "- WWW z komputera uczestnika: http://ADRES_TWOJEGO_RUNNERA:${APP_PORT}/"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show deployment container logs on failure
+        if: ${{ failure() && steps.validate.outcome == 'success' }}
+        run: docker logs "$CONTAINER_NAME" || true
+
+      - name: Log out and remove temporary Docker Hub credentials
+        if: always()
+        run: |
+          case "${DOCKER_CONFIG:-}" in
+            "${RUNNER_TEMP}/cw17a-docker-config."*)
+              docker logout || true
+              rm -f -- "${DOCKER_CONFIG}/config.json"
+              rmdir -- "$DOCKER_CONFIG" 2>/dev/null || true
+              ;;
+            *) echo "Nie utworzono tymczasowego katalogu logowania Docker Hub." ;;
+          esac

@@ -1,0 +1,312 @@
+# Reusable CI: wywołuj przez jobs.<job_id>.uses z workflow głównego.
+# Workflow główny przekazuje jawnie inputs oraz dwa nazwane secrets.
+# Repository variables używane przez wywołującego:
+#   DOCKERHUB_USERNAME = Twój publiczny login Docker Hub, np. piotrskoska
+#   DOCKER_IMAGE_NAME = python_pogoda
+# Repository secrets używane przez wywołującego:
+#   DOCKERHUB_TOKEN = token Docker Hub z prawem publikacji obrazu
+#   OPENWEATHER_API_KEY = prawdziwy, aktywny klucz OpenWeatherMap
+# Imię/nazwisko oraz miasto są inputs, a nie secrets.
+# Klucz API trafia wyłącznie do docker run -e; nigdy do obrazu ani outputs.
+# CI buduje jeden obraz, testuje go i publikuje ten sam image ID bez przebudowy.
+# Outputs dla kolejnego reusable workflow: image_reference, image_digest,
+# image_tag oraz student_slug. Wszystkie joby CI działają na GitHub-hosted Ubuntu.
+name: 17A Reusable Docker CI
+
+on:
+  workflow_call:
+    inputs:
+      app_dir:
+        description: Katalog aplikacji względem katalogu głównego repozytorium
+        type: string
+        required: false
+        default: ./CWICZENIA/17A-Cwiczenia-pipeline-gha/pogoda_python_flusk
+      first_name:
+        description: Imię bez polskich znaków, np. Jan
+        type: string
+        required: true
+      last_name:
+        description: Nazwisko bez polskich znaków, np. Kowalski
+        type: string
+        required: true
+      dockerhub_username:
+        description: Publiczny login Docker Hub, przekazany przez vars.DOCKERHUB_USERNAME
+        type: string
+        required: true
+      docker_image_name:
+        description: Nazwa obrazu, przekazana przez vars.DOCKER_IMAGE_NAME
+        type: string
+        required: true
+      weather_city:
+        description: Miasto rzeczywistego testu API
+        type: string
+        required: false
+        default: Warsaw
+    secrets:
+      DOCKERHUB_TOKEN:
+        description: Token Docker Hub z prawem publikacji obrazu
+        required: true
+      OPENWEATHER_API_KEY:
+        description: Prawdziwy, aktywny klucz API OpenWeatherMap
+        required: true
+    outputs:
+      image_reference:
+        description: Opublikowany obraz przypięty digestem, login/obraz@sha256:...
+        value: ${{ jobs.publish.outputs.image_reference }}
+      image_digest:
+        description: Digest opublikowanego obrazu, sha256:...
+        value: ${{ jobs.publish.outputs.image_digest }}
+      image_tag:
+        description: Tag imie-nazwisko-pełny_SHA_commita
+        value: ${{ jobs.prepare.outputs.image_tag }}
+      student_slug:
+        description: Imię i nazwisko zapisane małymi literami i połączone myślnikiem
+        value: ${{ jobs.prepare.outputs.student_slug }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  IMAGE_REPOSITORY: ${{ inputs.dockerhub_username }}/${{ inputs.docker_image_name }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      app_dir: ${{ steps.config.outputs.app_dir }}
+      student_slug: ${{ steps.config.outputs.student_slug }}
+      image_tag: ${{ steps.config.outputs.image_tag }}
+      sha_tag: ${{ steps.config.outputs.sha_tag }}
+      ci_image: ${{ steps.config.outputs.ci_image }}
+      artifact_name: ${{ steps.config.outputs.artifact_name }}
+      weather_city: ${{ steps.config.outputs.weather_city }}
+    steps:
+      - name: Checkout the caller repository to validate the application path
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate the reusable workflow inputs and prepare metadata
+        id: config
+        env:
+          RAW_APP_DIR: ${{ inputs.app_dir }}
+          FIRST_NAME: ${{ inputs.first_name }}
+          LAST_NAME: ${{ inputs.last_name }}
+          DOCKERHUB_USERNAME: ${{ inputs.dockerhub_username }}
+          DOCKER_IMAGE_NAME: ${{ inputs.docker_image_name }}
+          WEATHER_CITY: ${{ inputs.weather_city }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$DOCKERHUB_USERNAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]] ||
+             ! [[ "$DOCKER_IMAGE_NAME" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+            echo "::error::Podaj poprawne inputs dockerhub_username i docker_image_name, małymi literami."
+            exit 1
+          fi
+          for value in "$FIRST_NAME" "$LAST_NAME"; do
+            if ! [[ "$value" =~ ^[A-Za-z]+(-[A-Za-z]+)*$ ]] || [ "${#value}" -gt 30 ]; then
+              echo "::error::Imię i nazwisko: 1–30 liter ASCII, opcjonalnie człony połączone myślnikiem."
+              exit 1
+            fi
+          done
+          if [ -z "${WEATHER_CITY//[[:space:]]/}" ] || [ "${#WEATHER_CITY}" -gt 100 ] ||
+             [[ "$WEATHER_CITY" =~ [[:cntrl:]] ]]; then
+            echo "::error::Miasto musi mieć 1–100 znaków i mieścić się w jednej linii."
+            exit 1
+          fi
+          if [[ "$RAW_APP_DIR" =~ [[:cntrl:]] ]]; then
+            echo "::error::app_dir musi być pojedynczą ścieżką względem repozytorium."
+            exit 1
+          fi
+          app_dir="${RAW_APP_DIR#./}"
+          case "$app_dir" in
+            ''|/*|.|..|../*|*/../*|*/..|./*|*/./*|*/.|*//*|*/)
+              echo "::error::app_dir nie może być ścieżką bezwzględną ani zawierać składników . lub .. ."
+              exit 1
+              ;;
+          esac
+          workspace="$(realpath -e "$GITHUB_WORKSPACE")"
+          application="$(realpath -e "$app_dir")"
+          case "$application/" in
+            "$workspace/"*) ;;
+            *) echo "::error::app_dir wskazuje poza repozytorium, również przez dowiązanie."; exit 1 ;;
+          esac
+          test -f "$app_dir/Dockerfile"
+          test -f "$app_dir/tests/smoke_test.py"
+          student_slug="$(printf '%s-%s' "$FIRST_NAME" "$LAST_NAME" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "app_dir=./$app_dir"
+            echo "student_slug=$student_slug"
+            echo "image_tag=${student_slug}-${GITHUB_SHA}"
+            echo "sha_tag=$GITHUB_SHA"
+            echo "ci_image=cw17a-weather:ci-${GITHUB_SHA}"
+            echo "artifact_name=cw17a-image-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${student_slug}"
+            echo "weather_city=$WEATHER_CITY"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    runs-on: ubuntu-latest
+    needs: prepare
+    timeout-minutes: 15
+    outputs:
+      image_id: ${{ steps.image.outputs.image_id }}
+    env:
+      APP_DIR: ${{ needs.prepare.outputs.app_dir }}
+      CI_IMAGE: ${{ needs.prepare.outputs.ci_image }}
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build the image once without API credentials
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ env.APP_DIR }}
+          tags: ${{ env.CI_IMAGE }}
+          load: true
+          push: false
+
+      - name: Save the built image and expose its local ID
+        id: image
+        run: |
+          set -euo pipefail
+          image_environment="$(docker image inspect --format '{{json .Config.Env}}' "$CI_IMAGE")"
+          if [[ "$image_environment" == *'OPENWEATHER_API_KEY='* ]]; then
+            echo "::error::Klucz API nie może być częścią konfiguracji obrazu."
+            exit 1
+          fi
+          image_user="$(docker image inspect --format '{{.Config.User}}' "$CI_IMAGE")"
+          case "$image_user" in
+            ''|0|0:*|root|root:*) echo "::error::Obraz musi definiować użytkownika nie-root."; exit 1 ;;
+          esac
+          image_id="$(docker image inspect --format '{{.Id}}' "$CI_IMAGE")"
+          [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
+          docker save "$CI_IMAGE" -o image.tar
+
+      - name: Upload the built image for testing and publication
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ needs.prepare.outputs.artifact_name }}
+          path: image.tar
+          retention-days: 1
+
+  test:
+    runs-on: ubuntu-latest
+    needs: [prepare, build]
+    timeout-minutes: 10
+    env:
+      APP_DIR: ${{ needs.prepare.outputs.app_dir }}
+      CI_IMAGE: ${{ needs.prepare.outputs.ci_image }}
+      EXPECTED_IMAGE_ID: ${{ needs.build.outputs.image_id }}
+      WEATHER_CITY: ${{ needs.prepare.outputs.weather_city }}
+    steps:
+      - name: Checkout the provided smoke test
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download the built image
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.prepare.outputs.artifact_name }}
+
+      - name: Load and verify the exact image built by the previous job
+        run: |
+          docker load -i image.tar
+          test "$(docker image inspect --format '{{.Id}}' "$CI_IMAGE")" = "$EXPECTED_IMAGE_ID"
+
+      - name: Start the restricted test container with a real API key
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          if [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "::error::Przekaż wymagany secret OPENWEATHER_API_KEY do reusable CI."
+            exit 1
+          fi
+          docker run -d --name cw17a-ci \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            -p 127.0.0.1:18080:8080 -e OPENWEATHER_API_KEY "$CI_IMAGE"
+
+      - name: Verify the runtime security policy
+        run: |
+          test "$(docker exec cw17a-ci id -u)" != 0
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' cw17a-ci)" = true
+          cap_drop="$(docker inspect --format '{{json .HostConfig.CapDrop}}' cw17a-ci)"
+          security_opt="$(docker inspect --format '{{json .HostConfig.SecurityOpt}}' cw17a-ci)"
+          [[ "$cap_drop" == *'"ALL"'* ]]
+          [[ "$security_opt" == *'"no-new-privileges:true"'* ]]
+
+      - name: Test readiness, WWW and the real weather API
+        run: |
+          curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 \
+            --retry-max-time 60 --max-time 5 \
+            --output /dev/null http://127.0.0.1:18080/healthz
+          python3 "${APP_DIR}/tests/smoke_test.py" \
+            --base-url http://127.0.0.1:18080 --city "$WEATHER_CITY"
+
+      - name: Show the CI container logs on failure
+        if: failure()
+        run: docker logs cw17a-ci || true
+
+      - name: Remove the CI container
+        if: always()
+        run: docker rm --force cw17a-ci || true
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [prepare, build, test]
+    timeout-minutes: 15
+    outputs:
+      image_reference: ${{ steps.release.outputs.image_reference }}
+      image_digest: ${{ steps.release.outputs.image_digest }}
+    env:
+      CI_IMAGE: ${{ needs.prepare.outputs.ci_image }}
+      EXPECTED_IMAGE_ID: ${{ needs.build.outputs.image_id }}
+      IMAGE_TAG: ${{ needs.prepare.outputs.image_tag }}
+      SHA_TAG: ${{ needs.prepare.outputs.sha_tag }}
+    steps:
+      - name: Download the tested image
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.prepare.outputs.artifact_name }}
+
+      - name: Load the tested image without rebuilding
+        run: |
+          docker load -i image.tar
+          test "$(docker image inspect --format '{{.Id}}' "$CI_IMAGE")" = "$EXPECTED_IMAGE_ID"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ inputs.dockerhub_username }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publish both tags and expose the pinned image reference
+        id: release
+        run: |
+          set -euo pipefail
+          docker tag "$CI_IMAGE" "${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          docker tag "$CI_IMAGE" "${IMAGE_REPOSITORY}:${SHA_TAG}"
+          push_log="${RUNNER_TEMP}/cw17a-push.log"
+          docker push "${IMAGE_REPOSITORY}:${IMAGE_TAG}" 2>&1 | tee "$push_log"
+          image_digest="$(awk '$2 == "digest:" {print $3}' "$push_log" | sort -u)"
+          if ! [[ "$image_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::Nie można odczytać jednoznacznego digestu opublikowanego obrazu."
+            exit 1
+          fi
+          docker push "${IMAGE_REPOSITORY}:${SHA_TAG}"
+          {
+            echo "image_digest=$image_digest"
+            echo "image_reference=${IMAGE_REPOSITORY}@${image_digest}"
+          } >> "$GITHUB_OUTPUT"

@@ -1,0 +1,90 @@
+# PRZED URUCHOMIENIEM: Settings → Secrets and variables → Actions.
+# Repository variables:
+#   DOCKERHUB_USERNAME = Twój login Docker Hub, np. piotrskoska
+#   DOCKER_IMAGE_NAME = python_pogoda
+# Repository secrets:
+#   DOCKERHUB_TOKEN = token Docker Hub z prawem publikowania i pobierania obrazu
+#   OPENWEATHER_API_KEY = prawdziwy, aktywny klucz OpenWeatherMap
+# Runner deploya: Linux self-hosted, agent >= 2.327.1 (Node.js 24), Docker, python3, curl.
+# Port 18817 musi być wolny; na wspólnym hoście każdy uczestnik wybiera własny port.
+# Instrukcja: CWICZENIA/17A-Cwiczenia-pipeline-gha/README.md.
+
+name: 17A Pogoda — reusable workflows
+run-name: 17A Reuse — ${{ inputs.first_name }} ${{ inputs.last_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      first_name:
+        description: Imię bez polskich znaków, np. Jan
+        required: true
+        type: string
+      last_name:
+        description: Nazwisko bez polskich znaków, np. Kowalski
+        required: true
+        type: string
+      city:
+        description: Miasto do rzeczywistego testu API
+        required: true
+        type: string
+        default: Warsaw
+      app_port:
+        description: Wolny port HTTP na self-hosted, osobny dla uczestnika
+        required: true
+        # Tekst po obu stronach workflow_call; deploy sprawdza liczbę i zakres portu.
+        type: string
+        default: '18817'
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    # Reusable workflow wywołujemy na poziomie JOBA, bez runs-on i steps.
+    # Lokalna ścieżka oznacza plik z tego samego commita; nie dodawaj @main.
+    uses: ./.github/workflows/17A-reusable-docker-ci.yaml
+    with:
+      app_dir: ./CWICZENIA/17A-Cwiczenia-pipeline-gha/pogoda_python_flusk
+      first_name: ${{ inputs.first_name }}
+      last_name: ${{ inputs.last_name }}
+      dockerhub_username: ${{ vars.DOCKERHUB_USERNAME }}
+      docker_image_name: ${{ vars.DOCKER_IMAGE_NAME }}
+      weather_city: ${{ inputs.city }}
+    secrets:
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+
+  deploy:
+    needs: ci
+    uses: ./.github/workflows/17A-reusable-docker-deploy.yaml
+    with:
+      app_dir: ./CWICZENIA/17A-Cwiczenia-pipeline-gha/pogoda_python_flusk
+      # Output CI jest inputem drugiego reusable workflow.
+      image_reference: ${{ needs.ci.outputs.image_reference }}
+      container_name: ${{ format('cw17a-{0}-{1}-prod', github.repository_id, needs.ci.outputs.student_slug) }}
+      app_port: ${{ inputs.app_port }}
+      weather_city: ${{ inputs.city }}
+      dockerhub_username: ${{ vars.DOCKERHUB_USERNAME }}
+    secrets:
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+
+  result:
+    needs: [ci, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read the reusable workflows outputs
+        env:
+          IMAGE_REFERENCE: ${{ needs.ci.outputs.image_reference }}
+          IMAGE_TAG: ${{ needs.ci.outputs.image_tag }}
+          APP_URL: ${{ needs.deploy.outputs.app_url }}
+          APP_PORT: ${{ inputs.app_port }}
+        run: |
+          {
+            echo "### CW17A — outputs reużywanych workflow"
+            echo ""
+            echo "- Opublikowany obraz: $IMAGE_REFERENCE"
+            echo "- Tag uczestnika: $IMAGE_TAG"
+            echo "- Sprawdzony adres lokalny na self-hosted: $APP_URL"
+            echo "- WWW z komputera uczestnika: http://ADRES_TWOJEGO_RUNNERA:${APP_PORT}/"
+          } >> "$GITHUB_STEP_SUMMARY"
