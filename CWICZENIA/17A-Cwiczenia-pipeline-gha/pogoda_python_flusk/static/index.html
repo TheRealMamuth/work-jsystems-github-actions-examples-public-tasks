@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#152542">
+  <meta name="description" content="Aktualna pogoda w Twoim mieście. Sprawdź temperaturę, wiatr i warunki na zewnątrz.">
+  <title>Pogodnie — pogoda w Twoim mieście</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <linearGradient id="sun-gradient" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffe9a8"/><stop offset="1" stop-color="#ffb84d"/></linearGradient>
+      <linearGradient id="cloud-gradient" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fff"/><stop offset="1" stop-color="#cedffb"/></linearGradient>
+    </defs>
+    <symbol id="weather-sun" viewBox="0 0 200 200"><g fill="none" stroke="#ffd98a" stroke-width="8" stroke-linecap="round"><path d="M100 18v14m0 136v14M18 100h14m136 0h14M42 42l10 10m96 96 10 10M42 158l10-10m96-96 10-10"/></g><circle cx="100" cy="100" r="46" fill="url(#sun-gradient)"/></symbol>
+    <symbol id="weather-moon" viewBox="0 0 200 200"><path d="M139 142A67 67 0 0 1 91 32a68 68 0 1 0 69 87 65 65 0 0 1-21 23Z" fill="#e5ebff"/><path d="m149 28 4 10 11 1-8 8 2 11-9-6-10 6 2-11-8-8 11-1Zm27 53 3 7 8 1-6 5 2 8-7-4-7 4 2-8-6-5 8-1Z" fill="#ffe1a0"/></symbol>
+    <symbol id="weather-cloud" viewBox="0 0 200 200"><path d="M51 151a35 35 0 0 1-1-70 49 49 0 0 1 94-7 39 39 0 1 1 10 77Z" fill="url(#cloud-gradient)"/></symbol>
+    <symbol id="weather-partly-cloudy" viewBox="0 0 200 200"><g fill="none" stroke="#ffd98a" stroke-width="6" stroke-linecap="round"><path d="M84 15v10m0 105v10M22 77h10m105 0h10M40 33l8 8m73 73 8 8M40 121l8-8m73-73 8-8"/></g><circle cx="84" cy="77" r="37" fill="url(#sun-gradient)"/><path d="M66 163a31 31 0 0 1 0-62 44 44 0 0 1 83-7 35 35 0 1 1 11 69Z" fill="url(#cloud-gradient)"/></symbol>
+    <symbol id="weather-night-cloud" viewBox="0 0 200 200"><path d="M100 99A49 49 0 0 1 73 26a50 50 0 1 0 56 65 49 49 0 0 1-29 8Z" fill="#e5ebff"/><path d="M66 163a31 31 0 0 1 0-62 44 44 0 0 1 83-7 35 35 0 1 1 11 69Z" fill="url(#cloud-gradient)"/></symbol>
+    <symbol id="weather-rain" viewBox="0 0 200 200"><path d="M45 119a31 31 0 0 1 0-62 44 44 0 0 1 83-7 35 35 0 1 1 11 69Z" fill="url(#cloud-gradient)"/><g fill="none" stroke="#94c8ff" stroke-width="9" stroke-linecap="round"><path d="m66 140-10 19m47-19-10 19m47-19-10 19"/></g></symbol>
+    <symbol id="weather-snow" viewBox="0 0 200 200"><path d="M45 119a31 31 0 0 1 0-62 44 44 0 0 1 83-7 35 35 0 1 1 11 69Z" fill="url(#cloud-gradient)"/><g fill="none" stroke="#c6e6ff" stroke-width="5" stroke-linecap="round"><path d="M60 140v22m-10-17 20 12m-20 0 20-12M115 143v22m-10-17 20 12m-20 0 20-12M158 137v22m-10-17 20 12m-20 0 20-12"/></g></symbol>
+    <symbol id="weather-storm" viewBox="0 0 200 200"><path d="M45 119a31 31 0 0 1 0-62 44 44 0 0 1 83-7 35 35 0 1 1 11 69Z" fill="url(#cloud-gradient)"/><path d="m109 107-35 45h25l-9 36 43-54h-27l17-27Z" fill="#ffd789"/></symbol>
+    <symbol id="weather-mist" viewBox="0 0 200 200"><path d="M48 108a29 29 0 0 1 0-58 43 43 0 0 1 82-5 33 33 0 1 1 10 63Z" fill="url(#cloud-gradient)"/><g stroke="#d5e6fc" stroke-width="8" stroke-linecap="round"><path d="M37 132h125M52 153h92M30 174h132"/></g></symbol>
+  </svg>
+
+  <div class="page-shell">
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Pogodnie — strona główna">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 1v3m0 16v3M1 12h3m16 0h3M4.2 4.2l2.1 2.1m11.4 11.4 2.1 2.1M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg></span>
+        <span>Pogodnie<span class="brand-dot">.</span></span>
+      </a>
+      <a class="api-link" href="/docs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16"/></svg> API</a>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <span class="eyebrow">MAŁY RYTUAŁ. LEPSZY DZIEŃ.</span>
+        <h1 id="page-title">Każdy dzień ma<br>swoją <span>pogodę.</span></h1>
+        <p>Sprawdź, co słychać za oknem.<br class="desktop-break"> Wpisz miasto, resztę zostaw nam.</p>
+      </section>
+
+      <section class="search-section" aria-label="Wyszukaj pogodę">
+        <form id="weather-form" class="search-form">
+          <label class="sr-only" for="city">Nazwa miasta</label>
+          <div class="input-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20 10c0 6-8 11-8 11S4 16 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+            <input id="city" name="city" type="text" placeholder="Wpisz nazwę miasta, np. Warszawa" autocomplete="address-level2" maxlength="100" required aria-describedby="search-hint" enterkeyhint="search">
+          </div>
+          <button id="search-button" class="search-button" type="submit"><span id="button-label">Sprawdź pogodę</span><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg><span class="button-spinner" aria-hidden="true"></span></button>
+        </form>
+        <div class="suggestions"><span id="search-hint">Na przykład:</span><button type="button" data-city="Warszawa">Warszawa</button><button type="button" data-city="Kraków">Kraków</button><button type="button" data-city="Gdańsk">Gdańsk</button></div>
+        <div id="error-message" class="error-message" role="alert" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 3v1"/></svg><p id="error-text"></p></div>
+        <p id="live-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true">Wpisz nazwę miasta, aby sprawdzić aktualną pogodę.</p>
+      </section>
+
+      <section id="empty-state" class="empty-state" aria-labelledby="empty-title">
+        <div class="welcome-card">
+          <div class="welcome-copy"><span class="card-eyebrow">TWÓJ MAŁY POGODOWY NIEZBĘDNIK</span><h2 id="empty-title">Najpierw miasto.<br>Potem plany.</h2><p id="empty-description">Ciepły sweter czy okulary przeciwsłoneczne? Sprawdź pogodę, zanim wyjdziesz z domu.</p><span class="welcome-note">Aktualna pogoda, bez zbędnych kliknięć.</span></div>
+          <div class="welcome-art" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><svg viewBox="0 0 200 200"><use href="#weather-partly-cloudy"/></svg><span class="art-spark spark-one">✦</span><span class="art-spark spark-two">✦</span></div>
+        </div>
+        <div class="welcome-details">
+          <article><span class="detail-icon coral" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 14V5a3 3 0 0 1 6 0v9a5 5 0 1 1-6 0Z"/><path d="M12 8v10"/></svg></span><div><h3>Jak jest na zewnątrz?</h3><p>Temperatura i to, jak ją odczuwasz.</p></div></article>
+          <article><span class="detail-icon blue" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 8h12a3 3 0 1 0-3-3M3 12h16a3 3 0 1 1-3 3M3 16h5a3 3 0 1 1-3 3"/></svg></span><div><h3>Więcej niż stopnie</h3><p>Wiatr, wilgotność i widoczność.</p></div></article>
+          <article><span class="detail-icon gold" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 18h18M5 14a7 7 0 0 1 14 0M12 2v3M3 6l2 2m14 0 2-2M12 8v7m-3-3 3 3 3-3"/></svg></span><div><h3>W rytmie Twojego dnia</h3><p>Wschód i zachód słońca w mieście.</p></div></article>
+        </div>
+      </section>
+
+      <section id="weather-result" class="weather-result" aria-labelledby="result-city" hidden>
+        <div class="result-heading"><div><span id="result-country" class="eyebrow">AKTUALNA POGODA</span><h2 id="result-city"></h2></div><p id="result-date"></p></div>
+        <div class="weather-grid">
+          <article class="current-weather" aria-label="Aktualna temperatura">
+            <div class="current-top"><span class="current-label">W tej chwili</span><span id="day-label" class="day-label"></span></div>
+            <div class="temperature-row"><p class="temperature"><span id="temperature"></span><span class="temperature-unit">°C</span></p><svg id="weather-illustration" class="weather-illustration" viewBox="0 0 200 200" aria-hidden="true"><use id="weather-symbol" href="#weather-partly-cloudy"/></svg></div>
+            <div class="condition"><h3 id="weather-description"></h3><p>Odczuwalna <strong id="feels-like"></strong></p></div>
+            <div class="current-footer"><span id="observation-time"></span><span>OpenWeather</span></div>
+          </article>
+
+          <div class="metrics-grid">
+            <article class="metric-card"><span class="metric-icon blue" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3S5 11 5 15a7 7 0 0 0 14 0c0-4-7-12-7-12Z"/><path d="M8 15a4 4 0 0 0 4 4"/></svg></span><h3>Wilgotność</h3><p id="humidity" class="metric-value"></p><span class="metric-caption">Wilgotność powietrza</span></article>
+            <article class="metric-card"><span class="metric-icon mint" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 8h12a3 3 0 1 0-3-3M3 12h16a3 3 0 1 1-3 3M3 16h5a3 3 0 1 1-3 3"/></svg></span><h3>Wiatr</h3><p id="wind" class="metric-value"></p><span class="metric-caption">Prędkość wiatru</span></article>
+            <article class="metric-card"><span class="metric-icon lavender" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 18a9 9 0 1 1 16 0Z"/><path d="m12 13 4-5M7 12H5m14 0h-2M12 6V4"/><circle cx="12" cy="13" r="1.5"/></svg></span><h3>Ciśnienie</h3><p id="pressure" class="metric-value"></p><span class="metric-caption">Ciśnienie atmosferyczne</span></article>
+            <article class="metric-card"><span class="metric-icon coral" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></span><h3>Widoczność</h3><p id="visibility" class="metric-value"></p><span class="metric-caption">Jak daleko widać</span></article>
+          </div>
+        </div>
+        <div class="day-details">
+          <article><span class="sun-detail-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 19h20M5 15a7 7 0 0 1 14 0M12 1v3M3 6l2 2m14 0 2-2M12 15V8m-3 3 3-3 3 3"/></svg></span><div><h3>Wschód słońca</h3><p id="sunrise"></p></div></article>
+          <article><span class="sun-detail-icon sunset-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 19h20M5 15a7 7 0 0 1 14 0M12 1v3M3 6l2 2m14 0 2-2M12 8v7m-3-3 3 3 3-3"/></svg></span><div><h3>Zachód słońca</h3><p id="sunset"></p></div></article>
+          <article><span class="sun-detail-icon cloud-detail-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 19a5 5 0 0 1-1-10 7 7 0 0 1 13-2 6 6 0 0 1 0 12Z"/></svg></span><div><h3>Zachmurzenie</h3><p id="clouds"></p></div></article>
+        </div>
+        <p class="result-note">Godziny podano według czasu lokalnego wybranego miasta.</p>
+      </section>
+    </main>
+
+    <footer class="site-footer"><span>Trochę pogody. Więcej dobrych planów.</span><span>Aktualne dane pogodowe · OpenWeather</span></footer>
+  </div>
+</body>
+</html>

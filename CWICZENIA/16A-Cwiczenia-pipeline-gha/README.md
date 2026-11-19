@@ -1,4 +1,4 @@
-# Ćwiczenie 16A — kontrola bezpieczeństwa przed publikacją i deployem
+# Ćwiczenie 16A — raportowanie bezpieczeństwa i opcjonalne blokowanie deploya
 
 ## 1. Najpierw ustaw wymagane vars i secrets
 
@@ -64,14 +64,51 @@ prepare ─────────┤                   ├─ build ─ test �
 | `prepare` | Walidacja inputs, przygotowanie nazw i outputs |
 | `source-security` | Trivy: zależności, konfiguracja i sekrety w plikach aplikacji |
 | `python-security` | Bandit: analiza bezpieczeństwa kodu Python |
-| `build` | Jednorazowe zbudowanie obrazu po sukcesie kontroli źródeł |
+| `build` | Jednorazowe zbudowanie obrazu po zakończeniu kontroli źródeł |
 | `test` | Test utwardzonego kontenera z prawdziwym kluczem pogodowym |
 | `image-security` | Trivy: podatności i sekrety w dokładnie zbudowanym obrazie |
-| `publish` | Publikacja tego samego obrazu po sukcesie wszystkich kontroli |
+| `publish` | Publikacja tego samego obrazu po testach i etapie skanowania |
 | `deploy` | Uruchomienie opublikowanego digestu na self-hosted i ponowne testy |
 
-Kontrole źródeł wykonują się równolegle. Nieudana kontrola zatrzymuje dalszą
-część pipeline; publikacja ani deploy nie mogą omijać tego wyniku.
+Kontrole źródeł wykonują się równolegle. **Domyślnie bezpieczeństwo działa
+w trybie raportowania:** błędy trzech jobów skanujących są tolerowane przez
+`continue-on-error: true`. Skanery nadal zgłaszają problemy, ale pipeline
+może publikować i wdrażać obraz ze znaleziskami. Zielony wynik całego workflow
+nie oznacza wtedy czystych raportów ani bezpiecznego obrazu.
+
+Błędy przygotowania konfiguracji, budowania, zgodności ID obrazu, testów
+aplikacji, publikacji i deploya nadal blokują pipeline. Dotyczy to również
+wymagania użytkownika nie-root i ograniczeń działającego kontenera.
+
+### Jak włączyć blokowanie przez security
+
+W YAML wyszukaj trzy komentarze `SECURITY_ADVISORY`. Pod każdym znajduje się
+linia na poziomie joba:
+
+```yaml
+source-security:
+  # SECURITY_ADVISORY
+  continue-on-error: true
+```
+
+```yaml
+python-security:
+  # SECURITY_ADVISORY
+  continue-on-error: true
+```
+
+```yaml
+image-security:
+  # SECURITY_ADVISORY
+  continue-on-error: true
+```
+
+Aby wszystkie kontrole blokowały dalsze kroki, zakomentuj **wszystkie trzy**
+linie `continue-on-error: true`, czyli zmień je na
+`# continue-on-error: true`. Zakomentowanie jednej włącza blokowanie tylko
+dla odpowiedniego joba. Pozostaw progi skanerów, `exit-code: '1'`, raporty
+i zależności `needs` bez zmian; nie dodawaj `always()` do publikacji.
+
 W krokach checkout ustaw `persist-credentials: false`, ponieważ dalsze
 polecenia nie potrzebują zapisanych poświadczeń Git.
 
@@ -132,8 +169,10 @@ W pierwszym skanowaniu ustaw:
 | `exit-code` | `1` |
 | `format` | `json` |
 
-Zapisz wynik jako `trivy-source-dependencies.json` przez `output`. Kontrola ma zatrzymać
-job przy podatnościach lub błędach konfiguracji o poziomie HIGH/CRITICAL.
+Zapisz wynik jako `trivy-source-dependencies.json` przez `output`. Skaner
+zwraca błąd przy podatnościach lub błędach konfiguracji HIGH/CRITICAL.
+Domyślnie ten błąd jest tolerowany na poziomie joba; po zakomentowaniu jego
+oznaczonej linii `continue-on-error: true` staje się blokujący.
 `ignore-unfixed: false` obejmuje także znane podatności bez dostępnej poprawki.
 
 ## 6. Dodaj oddzielne skanowanie sekretów
@@ -152,21 +191,23 @@ HIGH/CRITICAL przepuściłoby wykryty sekret sklasyfikowany np. jako MEDIUM.
 Dla drugiego skanowania ustaw
 `if: ${{ !cancelled() && steps.scan_scope.outcome == 'success' }}`.
 Raport powstanie także po znaleziskach pierwszego skanera, ale dopiero po
-poprawnym sprawdzeniu katalogu. Nie zmienia to wyniku pierwszego kroku ani
-całego joba na sukces.
+poprawnym sprawdzeniu katalogu. Pierwszy krok zachowuje wynik błędu;
+`continue-on-error` joba decyduje, czy błąd zatrzyma dalszą część pipeline.
 
 Wynik sekretów zapisz jako `trivy-source-secrets.json`. Na końcu, przez
 `actions/upload-artifact@v4` z `if: always()`, opublikuj
 raporty jako `source-trivy-reports`, z retencją pięciu dni. Raport musi być
 dostępny również wtedy, gdy skaner wykryje problem.
 
-Jeśli oba skanowania zakończyły się sukcesem, sprawdź wcześniej każdy raport:
-plik musi być niepusty, zawierać poprawny JSON i `SchemaVersion: 2`.
-Brak jednego raportu nie może oznaczać zaliczenia kontroli.
+Po skanowaniu sprawdź każdy raport również wtedy, gdy skanery zgłosiły
+znaleziska: plik musi być niepusty, zawierać poprawny JSON i `SchemaVersion: 2`.
+Walidację uruchamiaj przy `!cancelled()` i poprawnym `scan_scope`.
+Brak albo uszkodzenie raportu jest błędem, który w trybie raportowania
+także jest tolerowany przez konfigurację joba; nie oznacza udanego skanu.
 
-Nie dodawaj `continue-on-error`, `exit-code: 0` ani `|| true` do kontroli
-bezpieczeństwa. Nie rozwiązuj problemu przez wyłączenie skanera lub ukrycie
-podatności plikiem wyjątków.
+Nie zmieniaj skanerów na `exit-code: 0` i nie dodawaj `|| true` do ich
+poleceń. Tolerowanie błędu realizują wyłącznie trzy oznaczone linie jobów.
+Nie wyłączaj skanera ani nie ukrywaj podatności plikiem wyjątków.
 
 ## 7. Sprawdź kod Python przez gotową akcję Bandit
 
@@ -181,7 +222,8 @@ with:
 
 Ta wersja akcji korzysta z Bandita `1.9.4`. Flaga `-ll` ustawia minimalną
 wagę problemu na MEDIUM, a `-i` dopuszcza ustalenia z pewnością LOW i wyższą.
-Wynik MEDIUM lub HIGH spełniający ten warunek ma zatrzymać job.
+Wynik MEDIUM lub HIGH spełniający ten warunek ma dać błąd kroku.
+Jego wpływ na dalszy pipeline zależy od `SECURITY_ADVISORY` tego joba.
 
 Bandit analizuje konstrukcje kodu Python, a Trivy sprawdza m.in. zależności
 i konfigurację. Jedno narzędzie nie zastępuje drugiego.
@@ -192,18 +234,21 @@ błąd parsowania lub brak faktycznie przeskanowanego kodu nie dadzą pozornego
 sukcesu. Brak albo niepoprawny JSON także musi zakończyć się błędem.
 
 Wyślij `bandit-report.json` jako artefakt `python-bandit-report`, z
-`if: always()` i retencją pięciu dni. Nie ignoruj kodu zakończenia Bandita
-i nie stosuj `--exit-zero`.
+`if: always()` i retencją pięciu dni. Zachowaj rzeczywisty kod zakończenia
+Bandita i nie stosuj `--exit-zero`; tolerancja jest ustawieniem całego joba.
 
-## 8. Zbuduj obraz tylko po udanych kontrolach źródeł
+## 8. Zbuduj obraz po zakończeniu kontroli źródeł
 
 Job `build` ma zależeć od `prepare`, `source-security` i `python-security`.
+W trybie raportowania może ruszyć mimo ich błędów. Po wyłączeniu tolerancji
+w jobie skanującym jego błąd zatrzyma budowanie.
 
 1. Pobierz kod repozytorium i przygotuj Buildx.
 2. Zbuduj aplikację bez klucza OpenWeatherMap i bez tokenu rejestru.
 3. Odczytaj ID obrazu przez `docker image inspect` i wystaw job output
    `image_id`.
-4. Sprawdź, że konfiguracja obrazu nie zawiera `OPENWEATHER_API_KEY=`.
+4. Sprawdź, że konfiguracja obrazu nie zawiera `OPENWEATHER_API_KEY=`
+   i definiuje użytkownika nie-root. Błąd tych warunków nadal blokuje build.
 5. Zapisz obraz jako `image.tar`.
 6. Wyślij artefakt `cw16a-weather-image`, z retencją jednego dnia
    i `overwrite: true`.
@@ -260,25 +305,30 @@ Wykonaj dwie kontrole:
 Zapisz wyniki odpowiednio jako `trivy-image-vulnerabilities.json` oraz
 `trivy-image-secrets.json`. Raporty wyślij jako `image-trivy-reports`, z retencją pięciu dni oraz
 `if: always()`. Tak jak w źródłach, drugie skanowanie może wykonać się po
-błędzie pierwszego; publikacja pozostaje zablokowana.
+błędzie pierwszego. Znaleziska i błędy skanera domyślnie nie blokują publikacji;
+blokowanie włącza zakomentowanie oznaczonej linii tego joba.
 
 Krok porównujący ID archiwum z obrazem `build` ma `id: verified_image`.
 Skan sekretów wymaga jego sukcesu przez
 `if: ${{ !cancelled() && steps.verified_image.outcome == 'success' }}`.
-Po udanych skanach sprawdź obecność i poprawność obu raportów w kroku
-`id: security_gate`, a następnie zapisz sprawdzone ID jako output `image_id`.
-Wystaw je jako job output `scanned_image_id` przez
-`steps.security_gate.outputs.image_id`.
+Już w kroku `verified_image`, przed skanowaniem, zapisz zgodne ID jako output
+`image_id`. Wystaw je jako job output `verified_image_id` przez
+`steps.verified_image.outputs.image_id`. Ten output potwierdza tożsamość
+obrazu z archiwum; nie potwierdza sukcesu skanów ani braku znalezisk.
+Po skanowaniu, również przy znaleziskach, sprawdź obecność i poprawność obu
+raportów przy `!cancelled()` i poprawnym wyniku `verified_image`.
 
-## 11. Uzależnij publikację od wszystkich kontroli
+## 11. Zachowaj zależności i tożsamość publikowanego obrazu
 
-Job `publish` musi wymagać sukcesu testu i obu kontroli źródeł oraz kontroli
-obrazu. Dodaj też bezpośrednie zależności od jobów, których outputs odczytuje.
-Nie uruchamiaj publikacji przez `always()` po nieudanym skanowaniu.
+Job `publish` zachowuje zależności od przygotowania, budowania, testu oraz
+etapu kontroli obrazu. Kontrole źródeł pozostają zależnościami joba `build`.
+Nie zmieniaj grafu ani nie uruchamiaj publikacji przez `always()`;
+o tolerowaniu błędów security decydują wyłącznie trzy oznaczone linie.
 
 Załaduj ten sam obraz z artefaktu i porównaj jego ID z outputem `build`
-oraz `needs.image-security.outputs.scanned_image_id`. Wszystkie trzy
-identyfikatory muszą być zgodne przed pierwszym `docker push`.
+oraz `needs.image-security.outputs.verified_image_id`. Wszystkie trzy
+identyfikatory muszą być zgodne przed pierwszym `docker push`, także w trybie
+raportowania. Brak lub niezgodność ID nadal blokuje publikację.
 Zaloguj się do Docker Hub przez sekret tokenu i opublikuj dwa tagi:
 
 ```text
@@ -330,7 +380,8 @@ dostęp; adres `127.0.0.1` widoczny w testach pipeline jest lokalny dla runnera.
    aby można go było uruchomić z interfejsu Actions.
 2. Otwórz **Actions**, wybierz workflow 16A i kliknij **Run workflow**.
 3. Podaj imię i nazwisko bez polskich znaków, miasto oraz własny wolny port.
-4. Obserwuj, czy nieudana kontrola zatrzymuje zależne joby.
+4. Sprawdź wyniki kroków skanujących i raporty. W domyślnym trybie ich
+   błędy są tolerowane, więc cały przebieg może zakończyć się sukcesem.
 5. W podsumowaniu przebiegu, w sekcji **Artifacts**, pobierz raporty:
 
 | Artefakt | Co zawiera |
@@ -341,8 +392,9 @@ dostęp; adres `127.0.0.1` widoczny w testach pipeline jest lokalny dla runnera.
 
 To raporty Actions, nie wpisy wymagające zakładki **Security → Code scanning**.
 Jeśli wcześniejszy etap zatrzymał pipeline, raport późniejszego joba nie
-powstanie. Błąd uruchomienia skanera lub pobrania bazy także jest błędem joba,
-a nie potwierdzeniem braku problemów.
+powstanie. Błąd uruchomienia skanera lub pobrania bazy jest błędem kontroli,
+a nie potwierdzeniem braku problemów. W trybie raportowania także taki błąd
+jest tolerowany przez job-level `continue-on-error`.
 
 ## 14. Popraw wykryte problemy i powtórz przebieg
 
@@ -359,26 +411,45 @@ maskuje ich wartości, ale raporty nadal traktuj jako materiały projektu.
 Ponów pełny pipeline po poprawkach. Baza CVE jest aktualizowana, dlatego
 dzisiejszy sukces nie gwarantuje identycznego wyniku następnego uruchomienia.
 Pierwszy rzeczywisty przebieg może wykryć HIGH/CRITICAL również w gotowym
-obrazie bazowym i zatrzymać publikację. Nie obniżaj progów ani nie wyłączaj
-kontroli tylko po to, aby uzyskać zielony wynik.
+obrazie bazowym. Domyślnie będą raportowane bez blokowania; po wyłączeniu
+tolerancji zatrzymają publikację. Nie obniżaj progów ani nie wyłączaj skanerów.
 
-Sukces oznacza spełnienie opisanych reguł dla faktycznie sprawdzonego zakresu
-i użytej bazy. Nie jest gwarancją wykrycia wszystkich możliwych zagrożeń.
+W trybie raportowania zielony workflow nie potwierdza spełnienia reguł
+bezpieczeństwa. Odczytaj raporty oraz logi. Nawet skan bez znalezisk dotyczy
+wyłącznie faktycznie sprawdzonego zakresu i użytej bazy, bez gwarancji wykrycia
+wszystkich możliwych zagrożeń.
 
-## 15. Sprawdź działanie blokady przed wdrożeniem
+## 15. Porównaj raportowanie z blokowaniem
 
 Opcjonalnie wykonaj kontrolowany eksperyment na osobnej gałęzi:
 
-1. W ćwiczeniowej kopii Dockerfile zmień `USER 10001:10001` na `USER root`.
-2. Uruchom workflow dla tej gałęzi z tymi samymi danymi uczestnika.
-3. Potwierdź, że problem zostaje wykryty przed publikacją i deployem.
-   Dotychczasowy kontener na self-hosted powinien pozostać uruchomiony.
-4. Wycofaj demonstracyjną zmianę i ponów sprawdzenie.
+1. Dodaj do katalogu aplikacji plik `security_demo.py` z niewywoływaną funkcją:
+
+   ```python
+   import urllib.request
+
+   def demonstration_only():
+       return urllib.request.urlopen("file:///etc/passwd")
+   ```
+
+2. Nie importuj ani nie uruchamiaj tej funkcji w aplikacji. Bandit ma wykryć
+   regułę `B310` o ważności MEDIUM podczas analizy źródeł.
+3. Uruchom workflow w domyślnym trybie raportowania. Znalezisko jest widoczne
+   w raporcie, ale samo nie zatrzymuje dalszych jobów. Build, test i deploy
+   nadal muszą spełniać swoje wymagania.
+4. Zakomentuj trzy linie `continue-on-error: true` oznaczone
+   `SECURITY_ADVISORY`, po czym uruchom ponownie. Błąd Bandita ma teraz
+   zatrzymać build, publikację i deploy; dotychczasowy kontener pozostaje.
+5. Usuń plik demonstracyjny i ponów sprawdzenie. Wybierz docelowy tryb przez
+   pozostawienie lub zakomentowanie trzech oznaczonych linii.
+
+Nie używaj `USER root` do tej demonstracji: niezależny warunek joba `build`
+oraz testy runtime blokują taki obraz również w trybie raportowania.
 
 Nie przeprowadzaj demonstracji przez dodawanie prawdziwych tokenów do plików.
 Zadanie jest ukończone, kiedy wszystkie kontrole rzeczywiście wykonują swoją
-pracę, raporty są dostępne, błędy blokują publikację i deploy, a utwardzony
-kontener przechodzi test prawdziwego WWW/API.
+pracę, raporty są dostępne, rozumiesz przełączanie trybu przez trzy oznaczone
+linie, a utwardzony kontener przechodzi test prawdziwego WWW/API.
 
 Dokumentacja:
 [oficjalna akcja Trivy](https://github.com/aquasecurity/trivy-action),
@@ -386,3 +457,5 @@ Dokumentacja:
 [akcja Bandit](https://github.com/jpetrucciani/bandit-check),
 [opcje Bandita](https://bandit.readthedocs.io/en/latest/man/bandit.html)
 oraz [parametry uruchamiania kontenerów Docker](https://docs.docker.com/engine/containers/run/).
+Tolerowanie błędów opisuje dokumentacja
+[job-level continue-on-error](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idcontinue-on-error).
