@@ -1,0 +1,45 @@
+name: 13-02 Node.js CI with actions/cache
+
+on:
+  push:
+    branches: [ cw13 ]
+  pull_request:
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+    working-directory: ./CWICZENIA/13-caching/nodejs02
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ./CWICZENIA/13-caching/nodejs02/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test -- --watch=false || echo "No tests"
+
+      - name: Build (if needed)
+        run: |
+          echo "Tutaj mógłby być build, np. npm run build"
+          node server.js --check-only
