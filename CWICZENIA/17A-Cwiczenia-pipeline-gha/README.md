@@ -32,7 +32,10 @@ Kontener udostępnia HTTP na porcie `8080`: `/` z formularzem miasta,
 `/healthz` z gotowością oraz `/api/weather?city=Warsaw` z pogodą.
 
 Repozytorium musi mieć dostępny runner Linux z etykietami `self-hosted`
-i `linux`. Konto runnera potrzebuje dostępu do Dockera, Python 3 oraz `curl`.
+i `linux`, w wersji **co najmniej `2.327.1`**. Akcje użyte w rozwiązaniu
+korzystają z Node.js 24, dlatego starszy runner należy najpierw zaktualizować.
+Wymaganie opisuje [dokumentacja checkout v7](https://github.com/actions/checkout/tree/v7.0.1#whats-new).
+Konto runnera potrzebuje dostępu do Dockera, Python 3 oraz `curl`.
 Host musi łączyć się z Docker Hub i OpenWeatherMap. Wybierz wolny port,
 domyślnie `18817`; uczestnicy na wspólnym hoście muszą używać różnych portów.
 
@@ -146,9 +149,16 @@ W `17A-reusable-docker-deploy.yaml` także użyj `workflow_call`. Przygotuj:
 | `app_dir` | `string` | Katalog gotowego smoke testu; domyślnie katalog aplikacji 17A |
 | `image_reference` | `string` | Wymagana referencja obrazu przypięta digestem |
 | `container_name` | `string` | Wymagana nazwa kontenera obliczona przez callera |
-| `app_port` | `number` | Port hosta, domyślnie `18817`; dozwolone całkowite `1024`–`65535` |
+| `app_port` | `string` | Port hosta jako tekst, domyślnie `'18817'`; dozwolone całkowite `1024`–`65535` |
 | `weather_city` | `string` | Miasto testu, domyślnie `Warsaw` |
 | `dockerhub_username` | `string` | Wymagany login Docker Hub |
+
+Port przekazuj jako tekst zarówno w `workflow_dispatch`, jak i w
+`workflow_call`, z `type: string` oraz `default: '18817'`. Dzięki temu caller
+przekazuje parametr o tym samym tekstowym typie, którego oczekuje deploy.
+Przed
+uruchomieniem Dockera skrypt nadal sprawdza, czy wartość jest liczbą całkowitą
+z zakresu `1024`–`65535`; tekstowy interfejs nie znosi tej walidacji.
 
 Zadeklaruj te same dwa wymagane sekrety. Nie zakładaj, że sekret przekazany
 do workflow CI automatycznie trafia do osobnego workflow deploya.
@@ -192,7 +202,7 @@ W `17A-pogoda-reusable.yaml` dodaj `workflow_dispatch` z formularzem:
 | `first_name` | `string`, wymagany | `Jan` |
 | `last_name` | `string`, wymagany | `Kowalski` |
 | `city` | `string` | `Warsaw` |
-| `app_port` | `number` | `18817` |
+| `app_port` | `string` | `'18817'` |
 
 Job `ci` wywołuje reusable CI, a job `deploy` z `needs: ci` wywołuje reusable
 deploy. Nazwę kontenera złóż jako
@@ -233,8 +243,9 @@ on:
       app_port:
         description: Wolny port HTTP na self-hosted, osobny dla uczestnika
         required: true
-        type: number
-        default: 18817
+        # Tekst po obu stronach workflow_call; deploy sprawdza liczbę i zakres portu.
+        type: string
+        default: '18817'
 
 permissions:
   contents: read
@@ -338,6 +349,15 @@ się do runnera i nie zastępuje adresu jego hosta.
 
 Tylko caller ma ręczne `workflow_dispatch`. Dwa pliki z `workflow_call`
 uruchamiają się przez wywołanie, nie jako osobne formularze tego ćwiczenia.
+
+Jeśli wcześniejsza wersja pokazała `Unexpected value '18817'`, sprawdź typ
+`string` i tekstowy default w **obu** plikach: callerze i reusable deployu.
+Podobny problem z przekazywaniem liczbowego inputu opisano w
+[zgłoszeniu GitHub Actions runner](https://github.com/actions/runner/issues/2848).
+Po zapisaniu poprawek wybierz **Run workflow** dla gałęzi zawierającej nowy
+commit. Ponowienie starego przebiegu przez **Re-run jobs** nadal korzysta
+z jego wcześniejszego commita. Zobacz
+[zasady ponawiania przebiegów](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs).
 
 ## 12. Sprawdź ponowne użycie i obsługę błędów
 
