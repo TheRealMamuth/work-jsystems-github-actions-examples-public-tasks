@@ -1,0 +1,384 @@
+# PRZED URUCHOMIENIEM: Settings → Secrets and variables → Actions.
+# Repository variables (zakładka Variables):
+#   DOCKERHUB_USERNAME = Twój login Docker Hub, np. piotrskoska
+#   DOCKER_IMAGE_NAME = python_pogoda
+# Repository secrets (zakładka Secrets):
+#   DOCKERHUB_TOKEN = token Docker Hub z prawem publikacji i pobierania obrazu
+#   OPENWEATHER_API_KEY = prawdziwy, aktywny klucz API OpenWeatherMap
+# Nie wpisuj wartości sekretów do YAML, Dockerfile, build-args ani outputs.
+# Klucz pogody jest przekazywany wyłącznie przy docker run -e.
+# Self-hosted: dostępny runner Linux, Docker dostępny dla konta runnera,
+# python3 i curl. Każdy uczestnik na wspólnym hoście wybiera osobny wolny port.
+# Instrukcja: CWICZENIA/12A-Cwiczenia-pipeline-gha/README.md.
+
+name: 12A Pogoda — inputs i outputs
+run-name: 12A — ${{ inputs.first_name }} ${{ inputs.last_name }} — ${{ inputs.deployment_target }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      first_name:
+        description: Imię bez polskich znaków, np. Jan
+        required: true
+        type: string
+      last_name:
+        description: Nazwisko bez polskich znaków, np. Kowalski
+        required: true
+        type: string
+      deployment_target:
+        description: Miejsce uruchomienia kontenera
+        required: true
+        type: choice
+        default: github
+        options:
+          - github
+          - self-hosted
+      city:
+        description: Miasto do rzeczywistego testu API
+        required: true
+        type: string
+        default: Warsaw
+      app_port:
+        description: Wolny port HTTP hosta; na wspólnym self-hosted osobny dla uczestnika
+        required: true
+        type: number
+        default: 18800
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  APP_DIR: ./CWICZENIA/12A-Cwiczenia-pipeline-gha/pogoda_python_flusk
+  IMAGE_REPOSITORY: ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.DOCKER_IMAGE_NAME }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      student_slug: ${{ steps.config.outputs.student_slug }}
+      image_tag: ${{ steps.config.outputs.image_tag }}
+      sha_tag: ${{ steps.config.outputs.sha_tag }}
+      ci_image: ${{ steps.config.outputs.ci_image }}
+      container_name: ${{ steps.config.outputs.container_name }}
+      runner_labels: ${{ steps.config.outputs.runner_labels }}
+      app_port: ${{ steps.config.outputs.app_port }}
+      weather_city: ${{ steps.config.outputs.weather_city }}
+      deployment_target: ${{ steps.config.outputs.deployment_target }}
+    steps:
+      - name: Validate inputs and create step outputs
+        id: config
+        env:
+          FIRST_NAME: ${{ inputs.first_name }}
+          LAST_NAME: ${{ inputs.last_name }}
+          DEPLOYMENT_TARGET: ${{ inputs.deployment_target }}
+          WEATHER_CITY: ${{ inputs.city }}
+          APP_PORT: ${{ inputs.app_port }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKER_IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$DOCKERHUB_USERNAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]] ||
+             ! [[ "$DOCKER_IMAGE_NAME" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+            echo "::error::Utwórz Variables DOCKERHUB_USERNAME i DOCKER_IMAGE_NAME zgodnie z instrukcją."
+            exit 1
+          fi
+          for value in "$FIRST_NAME" "$LAST_NAME"; do
+            if ! [[ "$value" =~ ^[A-Za-z]+(-[A-Za-z]+)*$ ]] || [ "${#value}" -gt 30 ]; then
+              echo "::error::Imię i nazwisko: 1–30 liter ASCII, opcjonalnie człony połączone myślnikiem."
+              exit 1
+            fi
+          done
+          if ! [[ "$APP_PORT" =~ ^[1-9][0-9]{0,4}$ ]] ||
+             [ "$APP_PORT" -lt 1024 ] || [ "$APP_PORT" -gt 65535 ]; then
+            echo "::error::Port musi być liczbą całkowitą od 1024 do 65535."
+            exit 1
+          fi
+          if [ -z "${WEATHER_CITY//[[:space:]]/}" ] || [ "${#WEATHER_CITY}" -gt 100 ] ||
+             [[ "$WEATHER_CITY" =~ [[:cntrl:]] ]]; then
+            echo "::error::Miasto musi mieć 1–100 znaków i mieścić się w jednej linii."
+            exit 1
+          fi
+          student_slug="$(printf '%s-%s' "$FIRST_NAME" "$LAST_NAME" | tr '[:upper:]' '[:lower:]')"
+          case "$DEPLOYMENT_TARGET" in
+            github)
+              runner_labels='["ubuntu-latest"]'
+              container_name="cw12a-${GITHUB_REPOSITORY_ID}-${student_slug}-${GITHUB_RUN_ID}"
+              ;;
+            self-hosted)
+              runner_labels='["self-hosted","linux"]'
+              container_name="cw12a-${GITHUB_REPOSITORY_ID}-${student_slug}-prod"
+              ;;
+            *) echo "::error::Wybierz github albo self-hosted."; exit 1 ;;
+          esac
+          {
+            echo "student_slug=$student_slug"
+            echo "image_tag=${student_slug}-${GITHUB_SHA}"
+            echo "sha_tag=$GITHUB_SHA"
+            echo "ci_image=cw12a-weather:ci-${GITHUB_SHA}"
+            echo "container_name=$container_name"
+            echo "runner_labels=$runner_labels"
+            echo "app_port=$APP_PORT"
+            echo "weather_city=$WEATHER_CITY"
+            echo "deployment_target=$DEPLOYMENT_TARGET"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    runs-on: ubuntu-latest
+    needs: prepare
+    timeout-minutes: 15
+    outputs:
+      image_id: ${{ steps.image.outputs.image_id }}
+    env:
+      CI_IMAGE: ${{ needs.prepare.outputs.ci_image }}
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the image once without API credentials
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.APP_DIR }}
+          tags: ${{ env.CI_IMAGE }}
+          load: true
+          push: false
+
+      - name: Save the image and expose its local ID
+        id: image
+        run: |
+          image_environment="$(docker image inspect --format '{{json .Config.Env}}' "$CI_IMAGE")"
+          if [[ "$image_environment" == *'OPENWEATHER_API_KEY='* ]]; then
+            echo "::error::Klucz API nie może być częścią konfiguracji obrazu."
+            exit 1
+          fi
+          image_id="$(docker image inspect --format '{{.Id}}' "$CI_IMAGE")"
+          [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
+          docker save "$CI_IMAGE" -o image.tar
+
+      - name: Upload the image for testing and publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: cw12a-weather-image
+          path: image.tar
+          retention-days: 1
+          overwrite: true
+
+  test:
+    runs-on: ubuntu-latest
+    needs: [prepare, build]
+    timeout-minutes: 10
+    env:
+      CI_IMAGE: ${{ needs.prepare.outputs.ci_image }}
+      EXPECTED_IMAGE_ID: ${{ needs.build.outputs.image_id }}
+      WEATHER_CITY: ${{ needs.prepare.outputs.weather_city }}
+    steps:
+      - name: Checkout the provided smoke test
+        uses: actions/checkout@v4
+
+      - name: Download the built image
+        uses: actions/download-artifact@v4
+        with:
+          name: cw12a-weather-image
+
+      - name: Load and check the exact image built by the previous job
+        run: |
+          docker load -i image.tar
+          test "$(docker image inspect --format '{{.Id}}' "$CI_IMAGE")" = "$EXPECTED_IMAGE_ID"
+
+      - name: Start the test container with a real API key
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          if [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "::error::Utwórz Repository secret OPENWEATHER_API_KEY."
+            exit 1
+          fi
+          docker run -d --name cw12a-ci \
+            -p 127.0.0.1:18080:8080 -e OPENWEATHER_API_KEY "$CI_IMAGE"
+
+      - name: Test readiness, WWW and the real weather API
+        run: |
+          curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 \
+            --retry-max-time 60 --max-time 5 \
+            --output /dev/null http://127.0.0.1:18080/healthz
+          python3 "${APP_DIR}/tests/smoke_test.py" \
+            --base-url http://127.0.0.1:18080 --city "$WEATHER_CITY"
+
+      - name: Show the test container logs on failure
+        if: failure()
+        run: docker logs cw12a-ci || true
+
+      - name: Remove the CI container
+        if: always()
+        run: docker rm --force cw12a-ci || true
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [prepare, build, test]
+    timeout-minutes: 15
+    outputs:
+      image_digest: ${{ steps.release.outputs.image_digest }}
+    env:
+      CI_IMAGE: ${{ needs.prepare.outputs.ci_image }}
+      EXPECTED_IMAGE_ID: ${{ needs.build.outputs.image_id }}
+      IMAGE_TAG: ${{ needs.prepare.outputs.image_tag }}
+      SHA_TAG: ${{ needs.prepare.outputs.sha_tag }}
+    steps:
+      - name: Download the tested image
+        uses: actions/download-artifact@v4
+        with:
+          name: cw12a-weather-image
+
+      - name: Load the tested image without rebuilding
+        run: |
+          docker load -i image.tar
+          test "$(docker image inspect --format '{{.Id}}' "$CI_IMAGE")" = "$EXPECTED_IMAGE_ID"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publish participant and SHA tags, then expose the digest
+        id: release
+        run: |
+          docker tag "$CI_IMAGE" "${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          docker tag "$CI_IMAGE" "${IMAGE_REPOSITORY}:${SHA_TAG}"
+          push_log="${RUNNER_TEMP}/cw12a-push.log"
+          docker push "${IMAGE_REPOSITORY}:${IMAGE_TAG}" 2>&1 | tee "$push_log"
+          image_digest="$(awk '$2 == "digest:" {print $3}' "$push_log" | sort -u)"
+          if ! [[ "$image_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::Nie można odczytać jednoznacznego digestu opublikowanego obrazu."
+            exit 1
+          fi
+          docker push "${IMAGE_REPOSITORY}:${SHA_TAG}"
+          # Digest jest zwykłą metadaną. Tokenów ani loginu nie przekazujemy jako outputs.
+          echo "image_digest=$image_digest" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    runs-on: ${{ fromJSON(needs.prepare.outputs.runner_labels) }}
+    needs: [prepare, publish]
+    timeout-minutes: 15
+    concurrency:
+      group: cw12a-deploy-${{ needs.prepare.outputs.container_name }}
+      cancel-in-progress: false
+    env:
+      DEPLOYMENT_TARGET: ${{ needs.prepare.outputs.deployment_target }}
+      CONTAINER_NAME: ${{ needs.prepare.outputs.container_name }}
+      APP_PORT: ${{ needs.prepare.outputs.app_port }}
+      WEATHER_CITY: ${{ needs.prepare.outputs.weather_city }}
+      IMAGE_TAG: ${{ needs.prepare.outputs.image_tag }}
+      IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
+    steps:
+      - name: Checkout the provided smoke test
+        uses: actions/checkout@v4
+
+      - name: Prepare an isolated Docker credentials directory
+        run: |
+          task_docker_config="$(mktemp -d "${RUNNER_TEMP}/cw12a-docker-config.XXXXXX")"
+          chmod 700 "$task_docker_config"
+          echo "DOCKER_CONFIG=$task_docker_config" >> "$GITHUB_ENV"
+
+      - name: Log in to Docker Hub for deployment
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          logout: false
+
+      - name: Pull the published image by digest before replacing any container
+        run: |
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          docker pull "${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+
+      - name: Remove the exact previous deployment container if it exists
+        run: |
+          existing_container="$(docker container ls --all --quiet --filter "name=^/${CONTAINER_NAME}$")"
+          if [ -n "$existing_container" ]; then
+            docker rm --force "$existing_container"
+          fi
+
+      - name: Run a temporary or permanent container using the prepared outputs
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          if [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "::error::Brak Repository secret OPENWEATHER_API_KEY."
+            exit 1
+          fi
+          if [ "$DEPLOYMENT_TARGET" = self-hosted ]; then
+            docker run -d --name "$CONTAINER_NAME" --restart unless-stopped \
+              -p "${APP_PORT}:8080" -e OPENWEATHER_API_KEY \
+              "${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+          else
+            docker run -d --name "$CONTAINER_NAME" \
+              -p "127.0.0.1:${APP_PORT}:8080" -e OPENWEATHER_API_KEY \
+              "${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+          fi
+
+      - name: Wait for the deployed API and produce a step output
+        id: ready
+        run: |
+          base_url="http://127.0.0.1:${APP_PORT}"
+          curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 \
+            --retry-max-time 60 --max-time 5 \
+            --output /dev/null "${base_url}/healthz"
+          test "$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME")" = true
+          echo "base_url=$base_url" >> "$GITHUB_OUTPUT"
+
+      - name: Test the deployed WWW and real API using the step output
+        env:
+          BASE_URL: ${{ steps.ready.outputs.base_url }}
+        run: |
+          python3 "${APP_DIR}/tests/smoke_test.py" \
+            --base-url "$BASE_URL" --city "$WEATHER_CITY"
+
+      - name: Summarize the verified deployment
+        env:
+          BASE_URL: ${{ steps.ready.outputs.base_url }}
+        run: |
+          {
+            echo "### CW12A — wdrożenie sprawdzone"
+            echo ""
+            echo "- Obraz: ${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+            echo "- Digest: $IMAGE_DIGEST"
+            echo "- Runner: $DEPLOYMENT_TARGET"
+            echo "- Kontener: $CONTAINER_NAME"
+            echo "- Adres testu na runnerze: $BASE_URL"
+            if [ "$DEPLOYMENT_TARGET" = self-hosted ]; then
+              echo "- Trwały kontener: wejdź na http://ADRES_TWOJEGO_RUNNERA:${APP_PORT}/"
+            else
+              echo "- To tymczasowy test wdrożenia. Kontener zostanie usunięty po jobie."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show deployment container logs on failure
+        if: failure()
+        run: docker logs "$CONTAINER_NAME" || true
+
+      - name: Remove the temporary GitHub-hosted deployment container
+        if: ${{ always() && needs.prepare.outputs.deployment_target == 'github' }}
+        run: docker rm --force "$CONTAINER_NAME" || true
+
+      - name: Log out and remove temporary Docker Hub credentials
+        if: always()
+        run: |
+          case "${DOCKER_CONFIG:-}" in
+            "${RUNNER_TEMP}/cw12a-docker-config."*)
+              docker logout || true
+              rm -f -- "${DOCKER_CONFIG}/config.json"
+              rmdir -- "$DOCKER_CONFIG" 2>/dev/null || true
+              ;;
+            *) echo "Nie utworzono tymczasowego katalogu logowania Docker Hub." ;;
+          esac
