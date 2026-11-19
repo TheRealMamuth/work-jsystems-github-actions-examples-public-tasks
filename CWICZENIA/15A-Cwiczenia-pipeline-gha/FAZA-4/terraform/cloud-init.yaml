@@ -1,0 +1,13 @@
+#cloud-config
+# Public system bootstrap only. Keep this file ASCII for user_data handling.
+# Runtime application and registry secrets are supplied later over SSH.
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - docker.io
+  - python3
+ssh_pwauth: false
+runcmd:
+  - [systemctl, enable, --now, docker]
+  - [docker, info]
