@@ -1,0 +1,43 @@
+name: 01 - Building Blocks v1
+
+on:
+  #push:
+  workflow_dispatch:
+
+jobs:
+  echo-hello:
+    runs-on: selfhostlinux
+    steps:
+      - name: Show environment
+        run: |
+          java -version
+          env
+      - name: Say hello
+        run: echo "Hello, World!"
+      - name: Utworz plik
+        run: touch nowy_plik.txt
+      - name: Sprawdz plik
+        run: ls -l nowy_plik.txt
+      - name: Wpis do pliku
+        run: echo "To jest nowa linia" >> nowy_plik.txt
+      - name: Sprawdz zawartosc pliku
+        run: cat nowy_plik.txt
+
+  echo-goodbye:
+    runs-on: ubuntu-latest
+    needs: echo-hello
+    steps:
+      - name: Show environment
+        run: env
+      - name: Odczytaj plik
+        run: |
+          cat nowy_plik.txt 
+      - name: Failed step
+        run: |
+          echo "I will fail"
+          exit 0  # dowolny kod != 0 spowoduje błąd kroku
+      - name: Say goodbye
+        run: echo "Goodbye!"
+        # Dodaj inne kroki i zobacz jak zachowuje sie github actions jako osobne joby oraz kroki w tym jobie.
+      - name: Czyscimy plik
+        run: rm -f nowy_plik.txt
