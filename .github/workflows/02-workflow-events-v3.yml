@@ -1,0 +1,19 @@
+name: 02 - Workflow Events v3
+
+on:
+  workflow_dispatch:
+
+jobs:
+  echo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show the trigger
+        run: |
+          echo "Event name: ${{ github.event_name }}"
+
+# Commit & push:
+# ```bash
+# git add .github/workflows/02-workflow-events.yaml
+# git commit -m "Exercise 02: keep only workflow_dispatch trigger"
+# git push
+# ```
