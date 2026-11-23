@@ -5,7 +5,7 @@ on:
 
 jobs:
   echo-hello:
-    runs-on: selfhostlinux
+    runs-on: ubuntu-latest
     steps:
       - name: Say hello
         run: echo "Hello, World!"

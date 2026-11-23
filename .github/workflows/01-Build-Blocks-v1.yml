@@ -6,7 +6,7 @@ on:
 
 jobs:
   echo-hello:
-    runs-on: selfhostlinux
+    runs-on: ubuntu-latest
     steps:
       - name: Show environment
         run: |
