@@ -1,0 +1,114 @@
+name: 04 - Docker Web CI - no actions
+
+on:
+  push:
+    branches: [ docker ]
+  pull_request:
+    branches: [ docker ]
+  workflow_dispatch:
+
+# (opcjonalnie) ogranicz równoległe uruchomienia dla PR-ów
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-no-actions-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: CWICZENIA/04-praca-z-zewnetrzymi-akcjami/docker-app-02
+
+    env:
+      IMAGE_NAME: webapp
+      TAG: ${{ github.sha }}
+      HOST_PORT: 8080          # port na hoście (runner)
+      CONTAINER_PORT: 80       # port w kontenerze, zmień jeśli w Twoim obrazie jest inny (np. 8080)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Wersje narzędzi
+        run: |
+          set -euxo pipefail
+          docker --version
+          curl --version
+
+      # (bez gotowych akcji) build obrazu z lokalnego Dockerfile
+      - name: Build obrazu
+        run: |
+          set -euxo pipefail
+          docker build \
+            --pull \
+            --tag "${IMAGE_NAME}:${TAG}" \
+            .
+
+      # pre-cleanup na wypadek kolizji nazw/portów
+      - name: Pre-cleanup kontenera (jeśli istnieje)
+        run: |
+          set -euxo pipefail
+          docker ps -a --format '{{.Names}}' | grep -q "^${IMAGE_NAME}$" && docker rm -f "${IMAGE_NAME}" || true
+          # zwolnij port jeśli coś nasłuchuje
+          sudo fuser -k "${HOST_PORT}/tcp" || true
+
+      # uruchom kontener (port HOST:CONTAINER)
+      - name: Run kontenera
+        run: |
+          set -euxo pipefail
+          docker run -d --name "${IMAGE_NAME}" -p "${HOST_PORT}:${CONTAINER_PORT}" "${IMAGE_NAME}:${TAG}"
+          docker ps
+
+      # poczekaj aż zacznie odpowiadać HTTP i zweryfikuj status
+      - name: Healthcheck HTTP
+        run: |
+          set -euxo pipefail
+          URL="http://localhost:${HOST_PORT}/"
+          echo "Sprawdzam ${URL}"
+
+          # czekamy maks. ~30s aż serwer wstanie
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null "${URL}"; then
+              echo "Serwis jest osiągalny."
+              break
+            fi
+            echo "Brak odpowiedzi, próba $i/30..."
+            sleep 1
+          done
+
+          # ostateczny, rygorystyczny test: kod 200 i minimalna treść (opcjonalnie)
+          HTTP_CODE=$(curl -s -o /tmp/index.html -w "%{http_code}" "${URL}")
+          echo "HTTP_CODE=${HTTP_CODE}"
+          test "${HTTP_CODE}" = "200"
+          # możesz też sprawdzić zawartość:
+          # grep -Ei '(<html|<head|<body)' /tmp/index.html
+
+      - name: Healthcheck HTTP 2
+        run: |
+          set -euxo pipefail
+          URL="http://localhost:${HOST_PORT}/"
+          for i in $(seq 1 30); do
+            curl -fsS -o /tmp/index.html "${URL}" && break || true
+            sleep 1
+          done
+          grep -F "cw04 github actions" /tmp/index.html
+          # (opcjonalnie) sprawdź, czy obrazek serwuje się lokalnie:
+          curl -fsS -I "${URL}assets/wall.jpg" | grep -E "^HTTP/.* 200"    
+
+      # logi przy niepowodzeniu (zawsze)
+      - name: Zrzut logów kontenera (always)
+        if: always()
+        run: |
+          set +e
+          echo "---- docker logs ${IMAGE_NAME} ----"
+          docker logs "${IMAGE_NAME}" || true
+          echo "-----------------------------------"
+
+      # sprzątanie (zawsze)
+      - name: Cleanup (always)
+        if: always()
+        run: |
+          set -euxo pipefail
+          docker rm -f "${IMAGE_NAME}" || true
+          docker image rm "${IMAGE_NAME}:${TAG}" || true
