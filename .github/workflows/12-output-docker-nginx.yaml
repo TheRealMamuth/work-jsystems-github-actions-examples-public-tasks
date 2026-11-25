@@ -1,0 +1,52 @@
+name: 12-outputs - Docker + Nginx
+
+on:
+  push:
+    paths:
+      - 'CWICZENIA/12-outputs/**'
+      - '.github/workflows/docker-nginx.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    # Domyślny katalog roboczy dla kroków "run"
+    defaults:
+      run:
+        working-directory: CWICZENIA/12-outputs
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t my-nginx:github-actions .
+
+      - name: Run container
+        run: |
+          # Uruchamiamy kontener w tle, mapujemy port 8080 hosta na 80 w kontenerze
+          docker run -d --name my-nginx -p 8080:80 my-nginx:github-actions
+          # Krótka pauza, żeby Nginx zdążył się podnieść
+          sleep 5
+
+      - name: Download page from Nginx
+        run: |
+          # Pobieramy stronę z działającego kontenera
+          curl -sS http://localhost:8080 > output.html
+          echo "Zawartość pobranej strony:"
+          cat output.html
+
+      - name: Extract title as step output
+        id: extract_title
+        run: |
+          # Wyciągamy zawartość <title>...</title> z HTML
+          title=$(grep -oP '(?<=<title>).*?(?=</title>)' output.html || echo "brak tytułu")
+          echo "Znaleziony tytuł: $title"
+          # Ustawiamy OUTPUT kroku
+          echo "page_title=$title" >> "$GITHUB_OUTPUT"
+
+      - name: Show step output
+        run: |
+          echo "Tytuł strony (z outputu kroku): ${{ steps.extract_title.outputs.page_title }}"
