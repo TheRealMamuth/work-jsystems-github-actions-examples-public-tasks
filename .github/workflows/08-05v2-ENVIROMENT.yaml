@@ -1,0 +1,419 @@
+name: 08-05v2 Pogoda API — Environments - bez test
+
+on:
+  # push:
+  #   branches: [main, dev]
+  # pull_request:
+  #   branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+# Wspólne Repository variables (Settings → Secrets and variables → Actions → Variables):
+# WORKDIR=./CWICZENIA/08-variables/pogoda_python_flusk
+# DOCKERHUB_USERNAME=piotrskoska (zastąp własnym loginem, jeśli korzystasz z innego konta)
+# DOCKER_IMAGE_NAME=python_pogoda
+# DEPLOY_BRANCH=main
+# WEATHER_CITY=Warsaw (opcjonalna wartość wspólna)
+# Repository secrets: DOCKERHUB_TOKEN oraz OPENWEATHER_API_KEY.
+# Klucz OPENWEATHER_API_KEY na poziomie repo jest potrzebny wspólnemu jobowi test.
+#
+# Settings → Environments: utwórz dev, test, prod.
+# W każdym Environment dodaj te same nazwy Environment variables, ale inne wartości:
+# nazwa zmiennej  | dev              | test             | prod
+# IMAGE_TAG      | devpiotrkoska    | testpiotrkoska   | prodpiotrkoska
+# APP_PORT       | 18081            | 18082            | 18083
+# CONTAINER_NAME | pogoda_api_dev   | pogoda_api_test  | pogoda_api_prod
+# WEATHER_CITY   | Warsaw           | Warsaw           | Warsaw
+# IMAGE_TAG, APP_PORT i CONTAINER_NAME ustaw w Environments, nie jako wspólne vars repo.
+# Token i klucz pogody można nadpisać w Environment secrets pod tymi samymi nazwami.
+# Szczegóły: CWICZENIA/08-variables/CW08_05_ENVIROMENT.md.
+
+env:
+  WORKDIR: ${{ vars.WORKDIR || './CWICZENIA/08-variables/pogoda_python_flusk' }}
+  DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || 'piotrskoska' }}
+  DOCKER_IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME || 'python_pogoda' }}
+  TEST_IMAGE: ${{ vars.DOCKERHUB_USERNAME || 'piotrskoska' }}/${{ vars.DOCKER_IMAGE_NAME || 'python_pogoda' }}
+  HUB_IMAGE_BASE: ${{ vars.DOCKERHUB_USERNAME || 'piotrskoska' }}/${{ vars.DOCKER_IMAGE_NAME || 'python_pogoda' }}
+  CI_TAG: ci-${{ github.sha }}
+  WEATHER_CITY: ${{ vars.WEATHER_CITY || 'Warsaw' }}
+
+jobs:
+  # Dwa wspólne joby CI, bez przypisania do Environment.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build local test image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.WORKDIR }}
+          tags: ${{ env.TEST_IMAGE }}:${{ env.CI_TAG }}
+          load: true
+          push: false
+
+      - name: Save image to tar
+        run: docker save "${TEST_IMAGE}:${CI_TAG}" -o image.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pogoda-environments-image
+          path: image.tar
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pogoda-environments-image
+
+      - name: Load Docker image
+        run: docker load -i image.tar
+
+      - name: Run CI test container
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          if [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "::error::Brak Repository secret OPENWEATHER_API_KEY dla wspólnego joba test."
+            exit 1
+          fi
+          docker run -d \
+            --name pogoda_api_environments_ci \
+            -p 127.0.0.1:8000:8000 \
+            -e OPENWEATHER_API_KEY \
+            "${TEST_IMAGE}:${CI_TAG}"
+
+      - name: Wait for CI API to be ready
+        continue-on-error: true
+        run: |
+        
+          curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 \
+            --retry-max-time 60 --max-time 5 \
+            --output /dev/null \
+            http://127.0.0.1:8000/openapi.json
+
+      - name: Test CI /weather endpoint via curl
+        run: |
+          curl --fail --silent --show-error --max-time 30 \
+            --get --data-urlencode "city=$WEATHER_CITY" \
+            http://127.0.0.1:8000/weather
+          echo
+
+      - name: Show CI container logs on failure
+        if: failure()
+        run: docker logs pogoda_api_environments_ci || true
+
+      - name: Remove CI test container
+        if: always()
+        run: docker rm --force pogoda_api_environments_ci || true
+
+  build-and-push-dev:
+    runs-on: ubuntu-latest
+    needs: test
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.ref_name == ('dev')
+    environment: dev
+    concurrency:
+      group: pogoda-env-publish-dev
+      cancel-in-progress: false
+    outputs:
+      image_digest: ${{ steps.publish.outputs.digest }}
+      image_tag: ${{ steps.configuration.outputs.image_tag }}
+    steps:
+      - name: Read dev image configuration
+        id: configuration
+        env:
+          IMAGE_TAG: ${{ vars.IMAGE_TAG }}
+        run: |
+          if [ "$IMAGE_TAG" != 'devpiotrkoska' ]; then
+            echo "::error::Ustaw IMAGE_TAG=devpiotrkoska w Environment dev."
+            exit 1
+          fi
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push dev image
+        id: publish
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.WORKDIR }}
+          push: true
+          tags: |
+            ${{ env.HUB_IMAGE_BASE }}:${{ env.IMAGE_TAG }}
+            ${{ env.HUB_IMAGE_BASE }}:${{ env.IMAGE_TAG }}-${{ github.sha }}
+
+  deploy-dev:
+    runs-on: [self-hosted, linux]
+    needs: build-and-push-dev
+    environment: dev
+    timeout-minutes: 5
+    concurrency:
+      group: pogoda-env-deploy-dev
+      cancel-in-progress: false
+    env:
+      TARGET_ENVIRONMENT: dev
+      IMAGE_DIGEST: ${{ needs.build-and-push-dev.outputs.image_digest }}
+      IMAGE_TAG: ${{ needs.build-and-push-dev.outputs.image_tag }}
+    steps:
+      # Environment variables odczytujemy po starcie joba, w env tego kroku.
+      - name: Validate dev deployment configuration
+        env:
+          APP_PORT: ${{ vars.APP_PORT }}
+          CONTAINER_NAME: ${{ vars.CONTAINER_NAME }}
+          WEATHER_CITY: ${{ vars.WEATHER_CITY || 'Warsaw' }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          for variable in APP_PORT CONTAINER_NAME IMAGE_DIGEST IMAGE_TAG WEATHER_CITY; do
+            if [ -z "${!variable}" ]; then
+              echo "::error::Brak konfiguracji $variable dla Environment $TARGET_ENVIRONMENT."
+              exit 1
+            fi
+          done
+          if ! [[ "$APP_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || (( APP_PORT > 65535 )); then
+            echo "::error::APP_PORT musi być liczbą od 1 do 65535."
+            exit 1
+          fi
+          if ! [[ "$CONTAINER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
+            echo "::error::Nieprawidłowa nazwa kontenera: użyj liter, cyfr, _ i -, zaczynając od litery lub cyfry."
+            exit 1
+          fi
+          if [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "::error::Brak sekretu OPENWEATHER_API_KEY dla Environment $TARGET_ENVIRONMENT."
+            exit 1
+          fi
+          {
+            echo "APP_PORT=$APP_PORT"
+            echo "CONTAINER_NAME=$CONTAINER_NAME"
+            echo "WEATHER_CITY=$WEATHER_CITY"
+            echo "API_BASE_URL=http://127.0.0.1:${APP_PORT}"
+          } >> "$GITHUB_ENV"
+          echo "Środowisko: $TARGET_ENVIRONMENT"
+          echo "Obraz: ${HUB_IMAGE_BASE}:${IMAGE_TAG}"
+          echo "Port: $APP_PORT; kontener: $CONTAINER_NAME; miasto: $WEATHER_CITY"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull published dev image by digest
+        run: docker pull "${HUB_IMAGE_BASE}@${IMAGE_DIGEST}"
+
+      - name: Remove previous dev container if it exists
+        run: |
+          existing_container="$(docker container ls --all --quiet --filter "name=^/${CONTAINER_NAME}$")"
+          if [ -n "$existing_container" ]; then
+            docker rm --force "$existing_container"
+          fi
+
+      - name: Run dev container
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          docker run -d \
+            --name "$CONTAINER_NAME" \
+            --restart unless-stopped \
+            -p "${APP_PORT}:8000" \
+            -e OPENWEATHER_API_KEY \
+            "${HUB_IMAGE_BASE}@${IMAGE_DIGEST}"
+
+      - name: Verify dev API is ready
+        run: |
+          curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 \
+            --retry-max-time 60 --max-time 5 \
+            --output /dev/null \
+            "$API_BASE_URL/openapi.json"
+          test "$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME")" = true
+
+      - name: Test dev /weather endpoint via curl
+        run: |
+          curl --fail --silent --show-error --max-time 30 \
+            --get --data-urlencode "city=$WEATHER_CITY" \
+            "$API_BASE_URL/weather"
+          echo
+          echo "OK - API środowiska $TARGET_ENVIRONMENT działa na porcie $APP_PORT."
+
+      - name: Show dev container logs on failure
+        if: failure()
+        run: |
+          if [ -n "${CONTAINER_NAME:-}" ]; then
+            docker logs "$CONTAINER_NAME" || true
+          fi
+
+  build-and-push-prod:
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.ref_name == ('main')
+    environment: prod
+    concurrency:
+      group: pogoda-env-publish-prod
+      cancel-in-progress: false
+    outputs:
+      image_digest: ${{ steps.publish.outputs.digest }}
+      image_tag: ${{ steps.configuration.outputs.image_tag }}
+    steps:
+      - name: Read prod image configuration
+        id: configuration
+        env:
+          IMAGE_TAG: ${{ vars.IMAGE_TAG }}
+        run: |
+          if [ "$IMAGE_TAG" != 'prodpiotrkoska' ]; then
+            echo "::error::Ustaw IMAGE_TAG=prodpiotrkoska w Environment prod."
+            exit 1
+          fi
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push prod image
+        id: publish
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.WORKDIR }}
+          push: true
+          tags: |
+            ${{ env.HUB_IMAGE_BASE }}:${{ env.IMAGE_TAG }}
+            ${{ env.HUB_IMAGE_BASE }}:${{ env.IMAGE_TAG }}-${{ github.sha }}
+
+  deploy-prod:
+    runs-on: [self-hosted, linux]
+    needs: build-and-push-prod
+    environment: prod
+    timeout-minutes: 5
+    concurrency:
+      group: pogoda-env-deploy-prod
+      cancel-in-progress: false
+    env:
+      TARGET_ENVIRONMENT: prod
+      IMAGE_DIGEST: ${{ needs.build-and-push-prod.outputs.image_digest }}
+      IMAGE_TAG: ${{ needs.build-and-push-prod.outputs.image_tag }}
+    steps:
+      # Environment variables odczytujemy po starcie joba, w env tego kroku.
+      - name: Validate prod deployment configuration
+        env:
+          APP_PORT: ${{ vars.APP_PORT }}
+          CONTAINER_NAME: ${{ vars.CONTAINER_NAME }}
+          WEATHER_CITY: ${{ vars.WEATHER_CITY || 'Warsaw' }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          for variable in APP_PORT CONTAINER_NAME IMAGE_DIGEST IMAGE_TAG WEATHER_CITY; do
+            if [ -z "${!variable}" ]; then
+              echo "::error::Brak konfiguracji $variable dla Environment $TARGET_ENVIRONMENT."
+              exit 1
+            fi
+          done
+          if ! [[ "$APP_PORT" =~ ^[1-9][0-9]{0,4}$ ]] || (( APP_PORT > 65535 )); then
+            echo "::error::APP_PORT musi być liczbą od 1 do 65535."
+            exit 1
+          fi
+          if ! [[ "$CONTAINER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
+            echo "::error::Nieprawidłowa nazwa kontenera: użyj liter, cyfr, _ i -, zaczynając od litery lub cyfry."
+            exit 1
+          fi
+          if [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "::error::Brak sekretu OPENWEATHER_API_KEY dla Environment $TARGET_ENVIRONMENT."
+            exit 1
+          fi
+          {
+            echo "APP_PORT=$APP_PORT"
+            echo "CONTAINER_NAME=$CONTAINER_NAME"
+            echo "WEATHER_CITY=$WEATHER_CITY"
+            echo "API_BASE_URL=http://127.0.0.1:${APP_PORT}"
+          } >> "$GITHUB_ENV"
+          echo "Środowisko: $TARGET_ENVIRONMENT"
+          echo "Obraz: ${HUB_IMAGE_BASE}:${IMAGE_TAG}"
+          echo "Port: $APP_PORT; kontener: $CONTAINER_NAME; miasto: $WEATHER_CITY"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull published prod image by digest
+        run: docker pull "${HUB_IMAGE_BASE}@${IMAGE_DIGEST}"
+
+      - name: Remove previous prod container if it exists
+        run: |
+          existing_container="$(docker container ls --all --quiet --filter "name=^/${CONTAINER_NAME}$")"
+          if [ -n "$existing_container" ]; then
+            docker rm --force "$existing_container"
+          fi
+
+      - name: Run prod container
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          docker run -d \
+            --name "$CONTAINER_NAME" \
+            --restart unless-stopped \
+            -p "${APP_PORT}:8000" \
+            -e OPENWEATHER_API_KEY \
+            "${HUB_IMAGE_BASE}@${IMAGE_DIGEST}"
+
+      - name: Verify prod API is ready
+        run: |
+          curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 \
+            --retry-max-time 60 --max-time 5 \
+            --output /dev/null \
+            "$API_BASE_URL/openapi.json"
+          test "$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME")" = true
+
+      - name: Test prod /weather endpoint via curl
+        run: |
+          curl --fail --silent --show-error --max-time 30 \
+            --get --data-urlencode "city=$WEATHER_CITY" \
+            "$API_BASE_URL/weather"
+          echo
+          echo "OK - API środowiska $TARGET_ENVIRONMENT działa na porcie $APP_PORT."
+
+      - name: Show prod container logs on failure
+        if: failure()
+        run: |
+          if [ -n "${CONTAINER_NAME:-}" ]; then
+            docker logs "$CONTAINER_NAME" || true
+          fi
