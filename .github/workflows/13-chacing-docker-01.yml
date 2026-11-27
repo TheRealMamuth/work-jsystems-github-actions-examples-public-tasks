@@ -1,0 +1,41 @@
+name: 13-01 Build Docker image with cache 01
+
+on:
+  push:
+    branches: [ cw13 ]
+  pull_request:
+    branches: [ cw13 ]
+  workflow_dispatch:
+
+
+defaults:
+  run:
+    shell: bash
+    working-directory: ./CWICZENIA/13-caching/docker01
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      # (Opcjonalne, ale dobre praktyki) osobny builder Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Budowa obrazu z wykorzystaniem cache w GitHub Actions
+      - name: Build Docker image (with cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./CWICZENIA/13-caching/docker01
+          file: ./CWICZENIA/13-caching/docker01/Dockerfile
+
+          # Nie pushujemy obrazu do rejestru – przykład tylko do builda
+          push: false
+          tags: example-nginx:latest
+
+          # Użycie cache'u z GitHub Actions
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
