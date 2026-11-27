@@ -44,7 +44,11 @@ run_stage() {
   printf '%q ' "$@" >&2
   printf '\n' >&2
   local status
-  if timeout --kill-after=30s "$limit" "$@"; then
+  # Terraform SSH allocates a PTY. Package configuration must not inherit
+  # its controlling terminal. Keep timeout INSIDE setsid so its process
+  # group still includes package scripts when a stage reaches its limit.
+  # Preserve stdin here: man-db-preseed deliberately supplies a here-string.
+  if setsid --wait timeout --kill-after=30s "$limit" "$@"; then
     status=0
   else
     status=$?
@@ -57,6 +61,11 @@ run_stage() {
   fi
   return "$status"
 }
+
+if ! command -v setsid >/dev/null 2>&1; then
+  echo '[bootstrap] setsid from util-linux is required for noninteractive provisioning.' >&2
+  exit 1
+fi
 
 if command -v cloud-init >/dev/null 2>&1; then
   if run_stage cloud-init-wait 480 cloud-init status --wait; then
@@ -131,7 +140,7 @@ stage_started=$SECONDS
 man_db_state="$(dpkg-query -W '-f=${db:Status-Status}' man-db 2>/dev/null || true)"
 case "$man_db_state" in
   installed|unpacked|half-configured|triggers-pending|triggers-awaited)
-    run_stage man-db-reconfigure 180 dpkg-reconfigure --frontend=noninteractive --force man-db
+    run_stage man-db-reconfigure 180 dpkg-reconfigure --frontend=noninteractive --force man-db </dev/null
     ;;
 esac
 current_stage='man-db-auto-update-check'
@@ -156,7 +165,7 @@ package_states="$(timeout --kill-after=5s 30 dpkg-query -W '-f=${db:Status-Statu
 if [ -n "$dpkg_audit" ] ||
   grep -Eq '^(unpacked|half-configured|half-installed|triggers-pending|triggers-awaited)$' <<< "$package_states"; then
   echo '[bootstrap] Resuming interrupted dpkg configuration with man-db indexing disabled.' >&2
-  run_stage dpkg-recovery 600 dpkg --configure -a
+  run_stage dpkg-recovery 600 dpkg --configure -a </dev/null
 else
   echo '[bootstrap] No interrupted package configuration; skipping dpkg recovery.' >&2
 fi
@@ -200,8 +209,10 @@ if [ "${#missing_packages[@]}" -gt 0 ]; then
     -o Dpkg::Options::=--force-confdef
     -o Dpkg::Options::=--force-confold
   )
-  run_stage apt-update 300 apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
-  run_stage apt-install 600 apt-get "${apt_options[@]}" install -y --no-upgrade --no-install-recommends "${missing_packages[@]}"
+  # EOF prevents inherited SSH input from becoming an unattended prompt.
+  # Package hooks and normal dpkg configuration remain enabled.
+  run_stage apt-update 300 apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update </dev/null
+  run_stage apt-install 600 apt-get "${apt_options[@]}" install -y --no-upgrade --no-install-recommends "${missing_packages[@]}" </dev/null
 else
   echo '[bootstrap] All required packages are installed; skipping apt update/install.' >&2
 fi

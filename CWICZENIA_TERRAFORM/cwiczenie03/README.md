@@ -443,12 +443,37 @@ oraz `duration`. Limity dla `cloud-init-wait`, `apt-update` i `apt-install`
 wynoszą odpowiednio 480, 300 i 600 sekund. Sam łączny czas joba nie wskazuje,
 które polecenie się zatrzymało.
 
-W [przykładowym nieudanym przebiegu](https://github.com/JsystemsSzkolenia/gha-szkolenie-23-11-2026/actions/runs/45957698114/job/140367920148)
+We [wcześniejszym nieudanym przebiegu](https://github.com/JsystemsSzkolenia/gha-szkolenie-23-11-2026/actions/runs/45957698114/job/140367920148)
 potwierdzono timeout `apt-install`: pakiety zostały pobrane, Docker i Nginx
 przeszły konfigurację, a ostatni komunikat dotyczył `Processing triggers for
 man-db`. Nie ustala to jeszcze procesu, który zatrzymał zakończenie APT.
 Ten pierwszy provisioner przygotowuje system i usługi; nie używa klucza
 OpenWeatherMap ani nie pobiera obrazu aplikacji.
+
+W [kolejnym przebiegu](https://github.com/JsystemsSzkolenia/gha-szkolenie-23-11-2026/actions/runs/45999767247/job/140508125454)
+przygotowanie `man-db` i sprawdzenie `dpkg` już się udały. APT pobrał
+73,9 MB w 2 sekundy, ale zatrzymał się na `Preconfiguring packages ...`
+przed rozpakowaniem pakietów. Etap `apt-install` osiągnął limit 600 sekund.
+To inny punkt zatrzymania niż we wcześniejszym logu. Brak `docker.service`
+i `nginx.service` w końcowej diagnostyce jest wtedy skutkiem niedokończonej
+instalacji, a nie dowodem błędnej konfiguracji usług.
+
+Teraz zachowaj w `run_stage` uruchamianie przez
+`setsid --wait timeout --kill-after=30s`. Terraform SSH przydziela terminal;
+`setsid` tworzy dla polecenia osobną sesję bez tego terminala, a `--wait`
+przekazuje kod zakończenia programu. Umieść `setsid` **przed** `timeout`,
+aby polecenie i jego skrypty pozostały w grupie nadzorowanej przez timeout.
+Do poleceń APT i konfiguracji `dpkg` dodaj `</dev/null` oraz zachowaj
+`DEBIAN_FRONTEND=noninteractive`. Etap `man-db-preseed` musi nadal otrzymać
+swój here-string — nie zamykaj wejścia dla wszystkich etapów bez wyjątku.
+
+Ta poprawka usuwa zależność instalacji od terminala i wejścia SSH.
+Nie pomija hooków APT ani konfiguracji pakietów i nie zwiększa limitu
+`apt-install`. Sam log nie rozstrzyga, który skrypt Debconf oczekiwał;
+skuteczność poprawki na konkretnej VM potwierdzi dopiero nowy przebieg.
+Mechanizmy opisują [kod komunikatora SSH Terraform](https://github.com/hashicorp/terraform/blob/main/internal/communicator/ssh/communicator.go),
+[setsid](https://manpages.debian.org/bookworm/util-linux/setsid.1.en.html)
+i [prekonfiguracja Debconf](https://manpages.debian.org/bookworm/debconf-doc/debconf.7.en.html).
 
 Poprawiony bootstrap czeka ograniczony czas na zwolnienie blokad pakietów,
 wyłącza przebudowę indeksu dokumentacji `man-db` podczas instalacji pakietów
@@ -479,6 +504,8 @@ Po zalogowaniu teraz odczytaj stan usług, logi pakietów i dostępność zasob�
 ```bash
 cloud-init status --long
 systemctl status apt-daily.service apt-daily-upgrade.service --no-pager
+ps -eo pid,ppid,pgid,sid,tpgid,stat,wchan:24,etimes,comm
+lslocks --output PID,COMMAND,TYPE,PATH
 journalctl -u cloud-final -u apt-daily -u apt-daily-upgrade \
   --since "30 minutes ago" --no-pager -n 100
 tail -n 80 /var/log/apt/term.log
@@ -491,6 +518,13 @@ exit
 To polecenia diagnostyczne; nie usuwaj blokad `dpkg`, nie zabijaj procesu APT
 i nie wyłączaj cloud-init. Ustal przyczynę na podstawie ostatniego etapu
 i logów. Nie publikuj state, prywatnego klucza ani pełnych logów z sekretami.
+
+Sam wpis `SubState=dead` oznacza stan wskazanej jednostki systemd — odczytaj
+również jej `Id`, `ActiveState` i `Result`. Nazwa procesu `unattended-upgr`
+jest skrócona i może dotyczyć usługi oczekującej na zamknięcie systemu;
+nie dowodzi trzymania blokady APT. Snapshot wykonany dopiero po timeout
+nie pokaże już ubitych procesów. Gdy problem się powtarza, odczytaj procesy
+i blokady z drugiej sesji SSH jeszcze podczas zatrzymania instalacji.
 
 Po zapisaniu poprawionego `files/bootstrap.sh` w repozytorium teraz uruchom
 **nowe Run workflow** z poprawionego commita. Funkcja **Re-run jobs** używa
@@ -1128,7 +1162,11 @@ run_stage() {
   printf '%q ' "$@" >&2
   printf '\n' >&2
   local status
-  if timeout --kill-after=30s "$limit" "$@"; then
+  # Terraform SSH allocates a PTY. Package configuration must not inherit
+  # its controlling terminal. Keep timeout INSIDE setsid so its process
+  # group still includes package scripts when a stage reaches its limit.
+  # Preserve stdin here: man-db-preseed deliberately supplies a here-string.
+  if setsid --wait timeout --kill-after=30s "$limit" "$@"; then
     status=0
   else
     status=$?
@@ -1141,6 +1179,11 @@ run_stage() {
   fi
   return "$status"
 }
+
+if ! command -v setsid >/dev/null 2>&1; then
+  echo '[bootstrap] setsid from util-linux is required for noninteractive provisioning.' >&2
+  exit 1
+fi
 
 if command -v cloud-init >/dev/null 2>&1; then
   if run_stage cloud-init-wait 480 cloud-init status --wait; then
@@ -1215,7 +1258,7 @@ stage_started=$SECONDS
 man_db_state="$(dpkg-query -W '-f=${db:Status-Status}' man-db 2>/dev/null || true)"
 case "$man_db_state" in
   installed|unpacked|half-configured|triggers-pending|triggers-awaited)
-    run_stage man-db-reconfigure 180 dpkg-reconfigure --frontend=noninteractive --force man-db
+    run_stage man-db-reconfigure 180 dpkg-reconfigure --frontend=noninteractive --force man-db </dev/null
     ;;
 esac
 current_stage='man-db-auto-update-check'
@@ -1240,7 +1283,7 @@ package_states="$(timeout --kill-after=5s 30 dpkg-query -W '-f=${db:Status-Statu
 if [ -n "$dpkg_audit" ] ||
   grep -Eq '^(unpacked|half-configured|half-installed|triggers-pending|triggers-awaited)$' <<< "$package_states"; then
   echo '[bootstrap] Resuming interrupted dpkg configuration with man-db indexing disabled.' >&2
-  run_stage dpkg-recovery 600 dpkg --configure -a
+  run_stage dpkg-recovery 600 dpkg --configure -a </dev/null
 else
   echo '[bootstrap] No interrupted package configuration; skipping dpkg recovery.' >&2
 fi
@@ -1284,8 +1327,10 @@ if [ "${#missing_packages[@]}" -gt 0 ]; then
     -o Dpkg::Options::=--force-confdef
     -o Dpkg::Options::=--force-confold
   )
-  run_stage apt-update 300 apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
-  run_stage apt-install 600 apt-get "${apt_options[@]}" install -y --no-upgrade --no-install-recommends "${missing_packages[@]}"
+  # EOF prevents inherited SSH input from becoming an unattended prompt.
+  # Package hooks and normal dpkg configuration remain enabled.
+  run_stage apt-update 300 apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update </dev/null
+  run_stage apt-install 600 apt-get "${apt_options[@]}" install -y --no-upgrade --no-install-recommends "${missing_packages[@]}" </dev/null
 else
   echo '[bootstrap] All required packages are installed; skipping apt update/install.' >&2
 fi
