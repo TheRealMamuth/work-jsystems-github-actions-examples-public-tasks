@@ -1,0 +1,377 @@
+name: 15A FAZA-3 — Matrix i Environments
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - CWICZENIA/15A-Cwiczenia-pipeline-gha/pogoda_python_flusk/**
+      - .github/workflows/15A-FAZA3-pogoda.yaml
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+# Repository variables: Settings → Secrets and variables → Actions → Variables.
+# DOCKERHUB_USERNAME=piotrskoska
+# DOCKER_IMAGE_NAME=python_pogoda
+# FAZA3_DEPLOY_BRANCH=main
+# FAZA3_WEATHER_CITY=Warsaw (miasto wspólnego testu CI)
+# Repository secrets: DOCKERHUB_TOKEN oraz OPENWEATHER_API_KEY.
+# Wspólny test nie ma Environment i wymaga klucza API na poziomie repozytorium.
+#
+# Settings → Environments: utwórz lub wykorzystaj test, dev i prod.
+# W każdym Environment dodaj poniższe Environment variables:
+# zmienna              | test                  | dev                  | prod
+# FAZA3_IMAGE_TAG       | faza3-test            | faza3-dev            | faza3-prod
+# FAZA3_APP_PORT        | 18093                 | 18094                | 18095
+# FAZA3_CONTAINER_NAME  | pogoda_api_faza3_test  | pogoda_api_faza3_dev  | pogoda_api_faza3_prod
+# FAZA3_WEATHER_CITY    | Warsaw                | Warsaw               | Warsaw
+# Environment secrets mogą nadpisać DOCKERHUB_TOKEN i OPENWEATHER_API_KEY.
+# Klucz API trafia tylko do docker run, nigdy do obrazu, cache ani metadanych release.
+#
+# 4 definicje jobów → 8 uruchomień: build + test + 3 publikacje + 3 deploye.
+# Wszystkie publikacje muszą się udać, zanim ruszy macierz deploy.
+# Metadane publikacji są oddzielnym artefaktem każdego środowiska, bez wspólnego outputu matrix.
+# Cache: GitHub Actions API v2, stały scope 15a-pogoda-faza3, mode=max.
+# HTTP jest domyślny: host APP_PORT → Nginx 8080 → Python 127.0.0.1:8000.
+# Instrukcja: CWICZENIA/15A-Cwiczenia-pipeline-gha/FAZA-3/README.md.
+env:
+  APP_DIR: ./CWICZENIA/15A-Cwiczenia-pipeline-gha/pogoda_python_flusk
+  DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || 'piotrskoska' }}
+  HUB_IMAGE_BASE: ${{ vars.DOCKERHUB_USERNAME || 'piotrskoska' }}/${{ vars.DOCKER_IMAGE_NAME || 'python_pogoda' }}
+  CI_IMAGE: ${{ vars.DOCKERHUB_USERNAME || 'piotrskoska' }}/${{ vars.DOCKER_IMAGE_NAME || 'python_pogoda' }}:ci-faza3-${{ github.sha }}
+  WEATHER_CITY: ${{ vars.FAZA3_WEATHER_CITY || 'Warsaw' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          version: latest
+          driver: docker-container
+
+      - name: Build image without API credentials
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.APP_DIR }}
+          tags: ${{ env.CI_IMAGE }}
+          load: true
+          push: false
+          # Stały scope pozwala użyć warstw poprzedniego przebiegu tej fazy.
+          # Buildx/BuildKit obsługują GitHub Cache API v2; brak dodatkowego PAT.
+          cache-from: type=gha,version=2,scope=15a-pogoda-faza3
+          cache-to: type=gha,version=2,scope=15a-pogoda-faza3,mode=max
+
+      - name: Verify image metadata contains no API key configuration
+        run: |
+          image_environment="$(docker image inspect --format '{{json .Config.Env}}' "$CI_IMAGE")"
+          if [[ "$image_environment" == *'OPENWEATHER_API_KEY='* ]]; then
+            echo "::error::Klucz API nie może być ustawiony w konfiguracji obrazu."
+            exit 1
+          fi
+
+      - name: Save built image
+        run: docker save "$CI_IMAGE" -o image.tar
+
+      - name: Upload image for testing and publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: faza3-weather-image
+          path: image.tar
+          retention-days: 1
+          overwrite: true
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 10
+    steps:
+      - name: Checkout smoke test
+        uses: actions/checkout@v4
+
+      - name: Download built image
+        uses: actions/download-artifact@v4
+        with:
+          name: faza3-weather-image
+
+      - name: Load built image
+        run: docker load -i image.tar
+
+      - name: Run container with the real API key
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          if [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "::error::Utwórz Repository secret OPENWEATHER_API_KEY z prawdziwym, aktywnym kluczem."
+            exit 1
+          fi
+          docker run -d \
+            --name pogoda_api_faza3_ci \
+            -p 127.0.0.1:18093:8080 \
+            -e OPENWEATHER_API_KEY \
+            "$CI_IMAGE"
+
+      - name: Wait for Nginx and Python readiness
+        run: |
+          curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 \
+            --retry-max-time 60 --max-time 5 \
+            --output /dev/null \
+            http://127.0.0.1:18093/healthz
+
+      - name: Test WWW and API against real OpenWeather data
+        run: |
+          python3 "${APP_DIR}/tests/smoke_test.py" \
+            --base-url http://127.0.0.1:18093 \
+            --city "$WEATHER_CITY"
+
+      - name: Show CI container logs on failure
+        if: failure()
+        run: docker logs pogoda_api_faza3_ci || true
+
+      - name: Remove CI test container
+        if: always()
+        run: docker rm --force pogoda_api_faza3_ci || true
+
+  build-and-push:
+    name: Publish (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    needs: test
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.ref_name == (vars.FAZA3_DEPLOY_BRANCH || 'main')
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [test, dev, prod]
+    environment: ${{ matrix.environment }}
+    concurrency:
+      group: pogoda-faza3-publish-${{ matrix.environment }}
+      cancel-in-progress: false
+    timeout-minutes: 15
+    env:
+      TARGET_ENVIRONMENT: ${{ matrix.environment }}
+    steps:
+      - name: Read environment image tag
+        env:
+          IMAGE_TAG: ${{ vars.FAZA3_IMAGE_TAG }}
+        run: |
+          if ! [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,86}$ ]]; then
+            echo "::error::Ustaw prawidłowe FAZA3_IMAGE_TAG w Environment $TARGET_ENVIRONMENT."
+            exit 1
+          fi
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+
+      - name: Download the tested image
+        uses: actions/download-artifact@v4
+        with:
+          name: faza3-weather-image
+
+      - name: Load the tested image without rebuilding
+        run: docker load -i image.tar
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publish the tested image with environment tags
+        run: |
+          docker tag "$CI_IMAGE" "${HUB_IMAGE_BASE}:${IMAGE_TAG}"
+          docker tag "$CI_IMAGE" "${HUB_IMAGE_BASE}:${IMAGE_TAG}-${GITHUB_SHA}"
+          push_log="${RUNNER_TEMP}/faza3-${TARGET_ENVIRONMENT}-push.log"
+          docker push "${HUB_IMAGE_BASE}:${IMAGE_TAG}-${GITHUB_SHA}" 2>&1 | tee "$push_log"
+          image_digest="$(awk '$2 == "digest:" {print $3}' "$push_log" | sort -u)"
+          if ! [[ "$image_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::Brak jednoznacznego digestu publikacji środowiska $TARGET_ENVIRONMENT."
+            exit 1
+          fi
+          docker push "${HUB_IMAGE_BASE}:${IMAGE_TAG}"
+          export IMAGE_DIGEST="$image_digest"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metadata = {
+              'environment': os.environ['TARGET_ENVIRONMENT'],
+              'image_tag': os.environ['IMAGE_TAG'],
+              'image_digest': os.environ['IMAGE_DIGEST'],
+              'commit': os.environ['GITHUB_SHA'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+          }
+          Path('release.json').write_text(json.dumps(metadata, indent=2) + '\n')
+          PY
+
+      - name: Upload environment release metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: faza3-release-${{ matrix.environment }}
+          path: release.json
+          retention-days: 1
+          overwrite: true
+
+  deploy:
+    name: Deploy (${{ matrix.environment }})
+    runs-on: [self-hosted, linux]
+    needs: build-and-push
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        environment: [test, dev, prod]
+    environment: ${{ matrix.environment }}
+    timeout-minutes: 10
+    concurrency:
+      group: pogoda-faza3-deploy-${{ matrix.environment }}
+      cancel-in-progress: false
+    env:
+      TARGET_ENVIRONMENT: ${{ matrix.environment }}
+    steps:
+      - name: Prepare isolated Docker credentials directory
+        run: |
+          task_docker_config="$(mktemp -d "${RUNNER_TEMP}/faza3-${TARGET_ENVIRONMENT}-docker-config.XXXXXX")"
+          chmod 700 "$task_docker_config"
+          echo "DOCKER_CONFIG=$task_docker_config" >> "$GITHUB_ENV"
+
+      - name: Checkout deployment smoke test
+        uses: actions/checkout@v4
+
+      - name: Download release metadata for this environment
+        uses: actions/download-artifact@v4
+        with:
+          name: faza3-release-${{ matrix.environment }}
+          path: release-metadata
+
+      - name: Validate environment configuration and published image
+        env:
+          IMAGE_TAG: ${{ vars.FAZA3_IMAGE_TAG }}
+          APP_PORT: ${{ vars.FAZA3_APP_PORT }}
+          CONTAINER_NAME: ${{ vars.FAZA3_CONTAINER_NAME }}
+          WEATHER_CITY: ${{ vars.FAZA3_WEATHER_CITY || 'Warsaw' }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          def fail(message):
+              raise SystemExit('::error::' + message)
+
+          environment = os.environ['TARGET_ENVIRONMENT']
+          for name in ('IMAGE_TAG', 'APP_PORT', 'CONTAINER_NAME', 'WEATHER_CITY', 'OPENWEATHER_API_KEY'):
+              if not os.environ.get(name, '').strip():
+                  fail(f'Brak konfiguracji {name} dla Environment {environment}.')
+          port = os.environ['APP_PORT']
+          if not re.fullmatch(r'[1-9][0-9]{0,4}', port) or int(port) > 65535:
+              fail('FAZA3_APP_PORT musi być liczbą od 1 do 65535.')
+          container = os.environ['CONTAINER_NAME']
+          namespace = r'pogoda_api_faza3_' + re.escape(environment) + r'(?:[_-][A-Za-z0-9_-]+)?'
+          if not re.fullmatch(namespace, container):
+              fail(f'FAZA3_CONTAINER_NAME musi mieć postać pogoda_api_faza3_{environment} lub tę nazwę z sufiksem _/-... .')
+          tag = os.environ['IMAGE_TAG']
+          if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,86}', tag):
+              fail('Nieprawidłowy tag środowiska.')
+          city = os.environ['WEATHER_CITY']
+          if len(city) > 100 or any(ord(character) < 32 for character in city):
+              fail('FAZA3_WEATHER_CITY musi zawierać poprawną nazwę miasta w jednej linii.')
+          try:
+              metadata = json.loads(Path('release-metadata/release.json').read_text())
+              matches = (
+                  metadata['environment'] == environment
+                  and metadata['image_tag'] == tag
+                  and metadata['commit'] == os.environ['GITHUB_SHA']
+                  and metadata['run_id'] == os.environ['GITHUB_RUN_ID']
+              )
+              digest = metadata['image_digest']
+          except (OSError, ValueError, KeyError, TypeError):
+              fail('Brak prawidłowych metadanych publikacji środowiska.')
+          if not matches or not isinstance(digest, str) or not re.fullmatch(r'sha256:[a-f0-9]{64}', digest):
+              fail('Metadane nie odpowiadają środowisku, tagowi lub bieżącemu przebiegowi.')
+          reference = os.environ['HUB_IMAGE_BASE'] + '@' + digest
+          with open(os.environ['GITHUB_ENV'], 'a') as destination:
+              for name, value in (
+                  ('APP_PORT', port), ('CONTAINER_NAME', container),
+                  ('WEATHER_CITY', city), ('IMAGE_REFERENCE', reference),
+              ):
+                  destination.write(f'{name}={value}\n')
+          print(f'Środowisko: {environment}; tag: {tag}; port: {port}; kontener: {container}')
+          PY
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          logout: false
+
+      - name: Pull the published environment image by digest
+        run: docker pull "$IMAGE_REFERENCE"
+
+      - name: Remove the previous environment container if it exists
+        run: |
+          existing_container="$(docker container ls --all --quiet --filter "name=^/${CONTAINER_NAME}$")"
+          if [ -n "$existing_container" ]; then
+            docker rm --force "$existing_container"
+          fi
+
+      - name: Run the environment container with runtime credentials
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          docker run -d \
+            --name "$CONTAINER_NAME" \
+            --restart unless-stopped \
+            -p "${APP_PORT}:8080" \
+            -e OPENWEATHER_API_KEY \
+            "$IMAGE_REFERENCE"
+
+      - name: Wait for the environment WWW and API
+        run: |
+          curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 \
+            --retry-max-time 60 --max-time 5 \
+            --output /dev/null \
+            "http://127.0.0.1:${APP_PORT}/healthz"
+          test "$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME")" = true
+
+      - name: Test deployed environment WWW and API with real weather data
+        run: |
+          python3 "${APP_DIR}/tests/smoke_test.py" \
+            --base-url "http://127.0.0.1:${APP_PORT}" \
+            --city "$WEATHER_CITY"
+          echo "Środowisko $TARGET_ENVIRONMENT działa na porcie $APP_PORT."
+
+      - name: Show environment container logs on failure
+        if: failure()
+        run: |
+          if [ -n "${CONTAINER_NAME:-}" ]; then
+            docker logs "$CONTAINER_NAME" || true
+          fi
+
+      - name: Log out from Docker Hub and remove temporary credentials
+        if: always()
+        run: |
+          case "${DOCKER_CONFIG:-}" in
+            "${RUNNER_TEMP}/faza3-${TARGET_ENVIRONMENT}-docker-config."*)
+              docker logout || true
+              rm -f -- "${DOCKER_CONFIG}/config.json"
+              rmdir -- "$DOCKER_CONFIG" 2>/dev/null || true
+              ;;
+            *)
+              echo "Nie utworzono tymczasowej konfiguracji Docker tego środowiska."
+              ;;
+          esac
