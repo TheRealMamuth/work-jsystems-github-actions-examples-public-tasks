@@ -16,15 +16,43 @@ wzorcem prowadzącego; do wykonania instrukcji wystarczają pliki opisane tutaj.
 Docelowy ruch HTTP:
 
 ```text
-http://IP_TWOJEGO_AGENTA:80 → Nginx na hoście
+http://206.189.230.57:80 → Nginx na hoście
   → 127.0.0.1:18080 na hoście → kontener aplikacji:8080
 ```
 
+### Dane hosta do tego ćwiczenia
+
+| Ustawienie | Wartość |
+| --- | --- |
+| Host agenta i cel wdrożenia Ansible | `206.189.230.57` |
+| Użytkownik SSH w przygotowanym inventory | `root` |
+| Istniejący prywatny klucz na maszynie agenta | `/home/student/.ssh/id_ed25519` |
+| Login Docker Hub | `piotrskoska` |
+| Adres WWW po poprawnym wdrożeniu | `http://206.189.230.57/` |
+| Adres API po poprawnym wdrożeniu | `http://206.189.230.57/api/weather?city=Warsaw` |
+
+Klucz API OpenWeatherMap i token Docker Hub zostały przekazane osobno.
+Zapisz je w lokalnym `ansible/vars.local.yml`, opisanym w kroku 5.
+Ten plik jest ignorowany przez Git. W przygotowanym lokalnym katalogu
+ćwiczenia dane są już uzupełnione; przy odtwarzaniu w innym klonie
+wpisz otrzymane wartości samodzielnie. Prywatny klucz SSH pozostaje
+w istniejącym pliku na agencie — nie wklejaj go do README ani inventory.
+
 ## 1. Wybierz kontroler i sprawdź adres hosta docelowego
 
-Teraz wybierz komputer, z którego uruchomisz Ansible: własny laptop albo
-inną maszynę z dostępem SSH do hosta agenta. Kontrolerem może być także sam
-host agenta; w tym ćwiczeniu połączysz się z jego jawnym IP przez Ansible.
+Teraz uruchom Ansible na maszynie agenta jako użytkownik `student`,
+który ma dostęp do `/home/student/.ssh/id_ed25519`. Ta maszyna będzie
+kontrolerem Ansible i jednocześnie celem wdrożenia: połączenie SSH
+z przygotowanego inventory będzie kierowane do `root@206.189.230.57`.
+Przyjęto konto `root`; przed uruchomieniem potwierdź, że przekazany klucz
+jest dopuszczony w jego `authorized_keys`. Jeśli klucz jest przypisany
+do innego konta, ustaw to konto w `ansible_user`. Komentarz klucza
+`root@tf-lab-piotr-koska-gh` jest etykietą i sam nie potwierdza konta SSH.
+
+Możesz użyć innego kontrolera z dostępem SSH do tego hosta. Wtedy zapewnij
+na nim własny bezpieczny dostęp do tego samego klucza i ustaw odpowiednią
+lokalną ścieżkę `CW04_SSH_KEY`. Ścieżka `/home/student/.ssh/id_ed25519`
+dotyczy maszyny agenta i nie oznacza pliku istniejącego na Twoim laptopie.
 
 Na przydzielonym hoście odczytaj adres interfejsu:
 
@@ -163,34 +191,48 @@ Teraz utwórz pełny plik przykładowy:
 ### Plik: `CWICZENIA_TERRAFORM/cwiczenie04/ansible/inventory.ini.example`
 
 ```ini
-# Zastąp dokumentacyjny IP i użytkownika swoim istniejącym hostem agenta.
-# Istniejący klucz SSH podaj przez --private-key /sciezka/do/klucza.
+# Host agenta wskazany do ćwiczenia 04; nie tworzymy nowej VM.
+# Klucz podaj z kontrolera przez --private-key /home/student/.ssh/id_ed25519.
 [weather_agents]
-agent ansible_host=203.0.113.20 ansible_user=student
+agent ansible_host=206.189.230.57 ansible_user=root
 ```
 
 Skopiuj go do lokalnego inventory:
 
 ```bash
-cp inventory.ini.example inventory.ini
+test -f inventory.ini || cp inventory.ini.example inventory.ini
 chmod 600 inventory.ini
 ```
 
-Otwórz `inventory.ini` w edytorze. Zastąp `203.0.113.20` swoim IP z `eth0`,
-a `student` rzeczywistym kontem przydzielonym do maszyny, np. `student`
-albo `root`. Zachowaj grupę `weather_agents` i alias `agent`. W grupie ma
-znajdować się dokładnie jeden host. Adres z przykładu jest dokumentacyjny.
+Otwórz `inventory.ini` w edytorze i potwierdź `206.189.230.57` oraz
+`ansible_user=root`. Zachowaj grupę `weather_agents` i alias `agent`.
+W grupie ma znajdować się dokładnie ten jeden host. Jeżeli prowadzący
+przydzieli Ci inną maszynę lub konto SSH, odpowiednio zmień inventory.
 
 Teraz wskaż na kontrolerze istniejący prywatny klucz do tego hosta:
 
 ```bash
-CW04_SSH_KEY="$HOME/.ssh/NAZWA_TWOJEGO_KLUCZA"
+CW04_SSH_KEY="/home/student/.ssh/id_ed25519"
 test -f "$CW04_SSH_KEY"
+test -r "$CW04_SSH_KEY"
+chmod 600 "$CW04_SSH_KEY"
+ssh-keygen -lf "$CW04_SSH_KEY"
 ```
 
-Zastąp nazwę pliku rzeczywistą. Klucz przechowuj poza repozytorium i podawaj
-jego ścieżkę przez `--private-key`. Przy pierwszym kontakcie zweryfikuj
-klucz hosta według ustaleń prowadzącego.
+Klucz przechowuj poza repozytorium i podawaj jego ścieżkę przez
+`--private-key`. Powyższe polecenia dotyczą lokalnego pliku na kontrolerze.
+Użytkownik `student` wykonuje Ansible, a `root` jest użytkownikiem
+połączenia z hostem docelowym.
+
+Odpowiadający mu przekazany klucz publiczny:
+
+```text
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAWNB7kVQ9CpOOA6Z1jdH3e5LoNmCKBzB8mef+a/T+ET root@tf-lab-piotr-koska-gh
+```
+
+To klucz użytkownika do logowania, a nie klucz identyfikujący serwer SSH.
+Przy pierwszym połączeniu zweryfikuj również klucz hosta według ustaleń
+prowadzącego.
 
 ## 5. Utwórz jawny plik zmiennych z kluczem API
 
@@ -217,13 +259,20 @@ weather_dockerhub_token: ""
 Teraz wykonaj:
 
 ```bash
-cp vars.local.yml.example vars.local.yml
+test -f vars.local.yml || cp vars.local.yml.example vars.local.yml
 chmod 600 vars.local.yml
 ```
 
 Otwórz `vars.local.yml` w edytorze i zastąp placeholder swoim aktywnym
 kluczem API. Zapisz klucz jako tekst w cudzysłowie. Pozostałe wartości możesz
 pozostawić zgodne z przykładem albo dostosować do swojej aplikacji.
+
+W konfiguracji dla `206.189.230.57` użyj otrzymanego klucza pogodowego
+w `openweather_api_key`, ustaw `weather_dockerhub_username: "piotrskoska"`
+i wpisz przekazany token w `weather_dockerhub_token`. W przygotowanym
+lokalnym `vars.local.yml` te trzy wartości są już ustawione. Nie zastępuj
+ich ponownie plikiem przykładowym. Rola wykona logowanie do Docker Hub;
+nie musisz wcześniej ręcznie wykonywać `docker login -u piotrskoska`.
 
 To **jawny, nieszyfrowany plik lokalny**. Prawa `0600` ograniczają odczyt
 na kontrolerze, ale nie szyfrują zawartości. Nie dodawaj tego pliku do Gita
@@ -943,15 +992,15 @@ if __name__ == "__main__":
 Teraz, nadal z katalogu `ansible`, wykonaj:
 
 ```bash
-curl --fail --silent --show-error http://TWOJ_PUBLICZNY_IP/healthz
-python3 ../tests/smoke_test.py --base-url http://TWOJ_PUBLICZNY_IP --city Warsaw
+curl --fail --silent --show-error http://206.189.230.57/healthz
+python3 ../tests/smoke_test.py --base-url http://206.189.230.57 --city Warsaw
 ```
 
-Zastąp placeholder IP z inventory. Test potwierdza formularz, zasoby,
+Użyj tego samego IP co w inventory. Test potwierdza formularz, zasoby,
 schemat API i rzeczywiste dane OpenWeatherMap. Nie przekazuj klucza
 w URL ani w argumentach testu. Oczekuj komunikatu `OPENWEATHER_OK`.
 
-Teraz otwórz `http://TWOJ_PUBLICZNY_IP/` w przeglądarce i wpisz miasto.
+Teraz otwórz `http://206.189.230.57/` w przeglądarce i wpisz miasto.
 Użytkownik podaje tylko miasto. Błąd klucza lub dostawcy ma być błędem
 testu, bez zastępowania odpowiedzi przykładową pogodą.
 Dostęp HTTP wymaga dopuszczenia portu `80` w regułach hosta i sieci.

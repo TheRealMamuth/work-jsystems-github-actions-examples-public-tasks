@@ -1,4 +1,4 @@
-# Zastąp dokumentacyjny IP i użytkownika swoim istniejącym hostem agenta.
-# Istniejący klucz SSH podaj przez --private-key /sciezka/do/klucza.
+# Host agenta wskazany do ćwiczenia 04; nie tworzymy nowej VM.
+# Klucz podaj z kontrolera przez --private-key /home/student/.ssh/id_ed25519.
 [weather_agents]
-agent ansible_host=203.0.113.20 ansible_user=student
+agent ansible_host=206.189.230.57 ansible_user=root

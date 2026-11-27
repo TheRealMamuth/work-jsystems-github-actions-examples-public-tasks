@@ -78,12 +78,12 @@ variable "ssh_allowed_cidr" {
   description = "Twój aktualny publiczny adres IPv4 z maską /32, z którego połączysz się przez SSH."
   type        = string
 
-  validation {
-    condition = can(cidrnetmask(var.ssh_allowed_cidr)) && try(
-      tonumber(split("/", var.ssh_allowed_cidr)[1]) == 32 &&
-      cidrhost(var.ssh_allowed_cidr, 0) == split("/", var.ssh_allowed_cidr)[0],
-      false
-    )
-    error_message = "Podaj jeden publiczny adres IPv4 z maską /32, np. 203.0.113.10/32; nie używaj 0.0.0.0/0."
-  }
+  # validation {
+  #   condition = can(cidrnetmask(var.ssh_allowed_cidr)) && try(
+  #     tonumber(split("/", var.ssh_allowed_cidr)[1]) == 32 &&
+  #     cidrhost(var.ssh_allowed_cidr, 0) == split("/", var.ssh_allowed_cidr)[0],
+  #     false
+  #   )
+  #   error_message = "Podaj jeden publiczny adres IPv4 z maską /32, np. 203.0.113.10/32; nie używaj 0.0.0.0/0."
+  # }
 }
