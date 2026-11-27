@@ -1,0 +1,572 @@
+# PRZED URUCHOMIENIEM: Settings → Secrets and variables → Actions.
+# Repository variables (zakładka Variables):
+#   DOCKERHUB_USERNAME = Twój login Docker Hub, np. piotrskoska
+#   DOCKER_IMAGE_NAME = python_pogoda
+# Repository secrets (zakładka Secrets):
+#   DOCKERHUB_TOKEN = token Docker Hub z prawem publikacji i pobierania obrazu
+#   OPENWEATHER_API_KEY = prawdziwy, aktywny klucz API OpenWeatherMap
+# Nie wpisuj wartości sekretów do YAML, Dockerfile, build-args ani outputs.
+# Klucz pogody jest przekazywany wyłącznie przy docker run -e.
+# Gotowe akcje: Trivy v0.36.0 / CLI v0.70.0 oraz Bandit 1.9.4.
+# Progi błędów: Trivy HIGH/CRITICAL (także bez poprawki), sekrety każdego poziomu;
+# Bandit MEDIUM/HIGH. Domyślnie błędy jobów security NIE blokują dalszych jobów.
+# Aby włączyć blokowanie, zakomentuj 3 linie continue-on-error: true
+# oznaczone SECURITY_ADVISORY. Progi skanerów i exit-code: '1' pozostaw bez zmian.
+# Raporty: Actions → konkretny przebieg → Artifacts; błędy także w logach jobów.
+# Akcje skanujące są przypięte do pełnych SHA; nie potrzeba GHAS ani tokenów SaaS.
+# Self-hosted: dostępny runner Linux, Docker dostępny dla konta runnera,
+# python3 i curl. Każdy uczestnik na wspólnym hoście wybiera osobny wolny port.
+# Instrukcja: CWICZENIA/16A-Cwiczenia-pipeline-gha/README.md.
+
+name: 16A Pogoda — security przed deployem
+run-name: 16A Security — ${{ inputs.first_name }} ${{ inputs.last_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      first_name:
+        description: Imię bez polskich znaków, np. Jan
+        required: true
+        type: string
+      last_name:
+        description: Nazwisko bez polskich znaków, np. Kowalski
+        required: true
+        type: string
+      city:
+        description: Miasto do rzeczywistego testu API
+        required: true
+        type: string
+        default: Warsaw
+      app_port:
+        description: Wolny port HTTP hosta; na wspólnym self-hosted osobny dla uczestnika
+        required: true
+        type: number
+        default: 18816
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  APP_DIR: ./CWICZENIA/16A-Cwiczenia-pipeline-gha/pogoda_python_flusk
+  IMAGE_REPOSITORY: ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.DOCKER_IMAGE_NAME }}
+  TRIVY_IGNORE_UNFIXED: 'false'
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      student_slug: ${{ steps.config.outputs.student_slug }}
+      image_tag: ${{ steps.config.outputs.image_tag }}
+      sha_tag: ${{ steps.config.outputs.sha_tag }}
+      ci_image: ${{ steps.config.outputs.ci_image }}
+      container_name: ${{ steps.config.outputs.container_name }}
+      app_port: ${{ steps.config.outputs.app_port }}
+      weather_city: ${{ steps.config.outputs.weather_city }}
+    steps:
+      - name: Validate inputs and create step outputs
+        id: config
+        env:
+          FIRST_NAME: ${{ inputs.first_name }}
+          LAST_NAME: ${{ inputs.last_name }}
+          WEATHER_CITY: ${{ inputs.city }}
+          APP_PORT: ${{ inputs.app_port }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKER_IMAGE_NAME: ${{ vars.DOCKER_IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$DOCKERHUB_USERNAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]] ||
+             ! [[ "$DOCKER_IMAGE_NAME" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+            echo "::error::Utwórz Variables DOCKERHUB_USERNAME i DOCKER_IMAGE_NAME zgodnie z instrukcją."
+            exit 1
+          fi
+          for value in "$FIRST_NAME" "$LAST_NAME"; do
+            if ! [[ "$value" =~ ^[A-Za-z]+(-[A-Za-z]+)*$ ]] || [ "${#value}" -gt 30 ]; then
+              echo "::error::Imię i nazwisko: 1–30 liter ASCII, opcjonalnie człony połączone myślnikiem."
+              exit 1
+            fi
+          done
+          if ! [[ "$APP_PORT" =~ ^[1-9][0-9]{0,4}$ ]] ||
+             [ "$APP_PORT" -lt 1024 ] || [ "$APP_PORT" -gt 65535 ]; then
+            echo "::error::Port musi być liczbą całkowitą od 1024 do 65535."
+            exit 1
+          fi
+          if [ -z "${WEATHER_CITY//[[:space:]]/}" ] || [ "${#WEATHER_CITY}" -gt 100 ] ||
+             [[ "$WEATHER_CITY" =~ [[:cntrl:]] ]]; then
+            echo "::error::Miasto musi mieć 1–100 znaków i mieścić się w jednej linii."
+            exit 1
+          fi
+          student_slug="$(printf '%s-%s' "$FIRST_NAME" "$LAST_NAME" | tr '[:upper:]' '[:lower:]')"
+          container_name="cw16a-${GITHUB_REPOSITORY_ID}-${student_slug}-prod"
+          {
+            echo "student_slug=$student_slug"
+            echo "image_tag=${student_slug}-${GITHUB_SHA}"
+            echo "sha_tag=$GITHUB_SHA"
+            echo "ci_image=cw16a-weather:ci-${GITHUB_SHA}"
+            echo "container_name=$container_name"
+            echo "app_port=$APP_PORT"
+            echo "weather_city=$WEATHER_CITY"
+          } >> "$GITHUB_OUTPUT"
+
+  source-security:
+    name: Trivy — zależności, Dockerfile i sekrety źródeł
+    runs-on: ubuntu-latest
+    needs: prepare
+    # SECURITY_ADVISORY: zakomentuj poniższą linię, aby błędy tego joba blokowały pipeline.
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - name: Checkout application source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the scan scope
+        id: scan_scope
+        run: |
+          test -f "${APP_DIR}/app.py"
+          test -f "${APP_DIR}/requirements.txt"
+          test -f "${APP_DIR}/Dockerfile"
+
+      - name: Trivy filesystem vulnerabilities and misconfigurations
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.70.0
+          scan-type: fs
+          scan-ref: ${{ env.APP_DIR }}
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '1'
+          format: json
+          output: trivy-source-dependencies.json
+          timeout: 10m
+
+      - name: Trivy source secrets at every severity
+        if: ${{ !cancelled() && steps.scan_scope.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_SEVERITY: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+        with:
+          version: v0.70.0
+          scan-type: fs
+          scan-ref: ${{ env.APP_DIR }}
+          scanners: secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '1'
+          format: json
+          output: trivy-source-secrets.json
+          timeout: 10m
+
+      - name: Require both valid source scan reports
+        if: ${{ !cancelled() && steps.scan_scope.outcome == 'success' }}
+        run: |
+          for report in trivy-source-dependencies.json trivy-source-secrets.json; do
+            test -s "$report"
+            jq -e 'type == "object" and .SchemaVersion == 2' "$report" >/dev/null
+          done
+
+      - name: Upload source security reports even after findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-trivy-reports
+          path: |
+            trivy-source-dependencies.json
+            trivy-source-secrets.json
+          if-no-files-found: error
+          retention-days: 5
+          overwrite: true
+
+  python-security:
+    name: Bandit — analiza bezpieczeństwa kodu Python
+    runs-on: ubuntu-latest
+    needs: prepare
+    # SECURITY_ADVISORY: zakomentuj poniższą linię, aby błędy tego joba blokowały pipeline.
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - name: Checkout application source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run the ready-made Python SAST action
+        uses: jpetrucciani/bandit-check@0dd659afc3190589090165b7295d17bbf5b67db4 # Bandit 1.9.4
+        with:
+          path: CWICZENIA/16A-Cwiczenia-pipeline-gha/pogoda_python_flusk
+          bandit_flags: '-ll -i -f json -o bandit-report.json'
+
+      - name: Require a valid report and actual code coverage
+        if: ${{ !cancelled() }}
+        run: |
+          jq -e '.errors == [] and (.metrics._totals.loc > 0)' bandit-report.json >/dev/null
+
+      - name: Upload the Python security report even after findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-bandit-report
+          path: bandit-report.json
+          if-no-files-found: error
+          retention-days: 5
+          overwrite: true
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [prepare, source-security, python-security]
+    timeout-minutes: 15
+    outputs:
+      image_id: ${{ steps.image.outputs.image_id }}
+    env:
+      CI_IMAGE: ${{ needs.prepare.outputs.ci_image }}
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the image once without API credentials
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.APP_DIR }}
+          tags: ${{ env.CI_IMAGE }}
+          load: true
+          push: false
+
+      - name: Save the image and expose its local ID
+        id: image
+        run: |
+          image_environment="$(docker image inspect --format '{{json .Config.Env}}' "$CI_IMAGE")"
+          if [[ "$image_environment" == *'OPENWEATHER_API_KEY='* ]]; then
+            echo "::error::Klucz API nie może być częścią konfiguracji obrazu."
+            exit 1
+          fi
+          image_user="$(docker image inspect --format '{{.Config.User}}' "$CI_IMAGE")"
+          case "$image_user" in
+            ''|0|0:*|root|root:*) echo "::error::Obraz musi definiować użytkownika nie-root."; exit 1 ;;
+          esac
+          image_id="$(docker image inspect --format '{{.Id}}' "$CI_IMAGE")"
+          [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
+          docker save "$CI_IMAGE" -o image.tar
+
+      - name: Upload the image for testing and publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: cw16a-weather-image
+          path: image.tar
+          retention-days: 1
+          overwrite: true
+
+  test:
+    runs-on: ubuntu-latest
+    needs: [prepare, build]
+    timeout-minutes: 10
+    env:
+      CI_IMAGE: ${{ needs.prepare.outputs.ci_image }}
+      EXPECTED_IMAGE_ID: ${{ needs.build.outputs.image_id }}
+      WEATHER_CITY: ${{ needs.prepare.outputs.weather_city }}
+    steps:
+      - name: Checkout the provided smoke test
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download the built image
+        uses: actions/download-artifact@v4
+        with:
+          name: cw16a-weather-image
+
+      - name: Load and check the exact image built by the previous job
+        run: |
+          docker load -i image.tar
+          test "$(docker image inspect --format '{{.Id}}' "$CI_IMAGE")" = "$EXPECTED_IMAGE_ID"
+
+      - name: Start the test container with a real API key
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          if [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "::error::Utwórz Repository secret OPENWEATHER_API_KEY."
+            exit 1
+          fi
+          docker run -d --name cw16a-ci \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            -p 127.0.0.1:18080:8080 -e OPENWEATHER_API_KEY "$CI_IMAGE"
+
+      - name: Verify the runtime security policy
+        run: |
+          test "$(docker exec cw16a-ci id -u)" != 0
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' cw16a-ci)" = true
+          cap_drop="$(docker inspect --format '{{json .HostConfig.CapDrop}}' cw16a-ci)"
+          security_opt="$(docker inspect --format '{{json .HostConfig.SecurityOpt}}' cw16a-ci)"
+          [[ "$cap_drop" == *'"ALL"'* ]]
+          [[ "$security_opt" == *'"no-new-privileges:true"'* ]]
+
+      - name: Test readiness, WWW and the real weather API
+        run: |
+          curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 \
+            --retry-max-time 60 --max-time 5 \
+            --output /dev/null http://127.0.0.1:18080/healthz
+          python3 "${APP_DIR}/tests/smoke_test.py" \
+            --base-url http://127.0.0.1:18080 --city "$WEATHER_CITY"
+
+      - name: Show the test container logs on failure
+        if: failure()
+        run: docker logs cw16a-ci || true
+
+      - name: Remove the CI container
+        if: always()
+        run: docker rm --force cw16a-ci || true
+
+  image-security:
+    name: Trivy — dokładnie przetestowany obraz
+    runs-on: ubuntu-latest
+    needs: [prepare, build, test]
+    # SECURITY_ADVISORY: zakomentuj poniższą linię, aby błędy tego joba blokowały pipeline.
+    continue-on-error: true
+    timeout-minutes: 30
+    outputs:
+      verified_image_id: ${{ steps.verified_image.outputs.image_id }}
+    env:
+      CI_IMAGE: ${{ needs.prepare.outputs.ci_image }}
+      EXPECTED_IMAGE_ID: ${{ needs.build.outputs.image_id }}
+    steps:
+      - name: Download the tested image archive
+        uses: actions/download-artifact@v4
+        with:
+          name: cw16a-weather-image
+
+      - name: Check the exact image that is about to be scanned
+        id: verified_image
+        run: |
+          docker load -i image.tar
+          test "$(docker image inspect --format '{{.Id}}' "$CI_IMAGE")" = "$EXPECTED_IMAGE_ID"
+          # To ID wejścia skanerów, a nie potwierdzenie braku podatności.
+          # Zapis przed skanami pozwala publikować również w trybie SECURITY_ADVISORY.
+          echo "image_id=$EXPECTED_IMAGE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Trivy OS and application dependency vulnerabilities in the image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.70.0
+          scan-type: image
+          input: image.tar
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '1'
+          format: json
+          output: trivy-image-vulnerabilities.json
+          timeout: 10m
+
+      - name: Trivy embedded image secrets at every severity
+        if: ${{ !cancelled() && steps.verified_image.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_SEVERITY: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+        with:
+          version: v0.70.0
+          scan-type: image
+          input: image.tar
+          scanners: secret
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: '1'
+          format: json
+          output: trivy-image-secrets.json
+          timeout: 10m
+
+      - name: Require both valid image scan reports
+        if: ${{ !cancelled() && steps.verified_image.outcome == 'success' }}
+        run: |
+          for report in trivy-image-vulnerabilities.json trivy-image-secrets.json; do
+            test -s "$report"
+            jq -e 'type == "object" and .SchemaVersion == 2' "$report" >/dev/null
+          done
+
+      - name: Upload image security reports even after findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-trivy-reports
+          path: |
+            trivy-image-vulnerabilities.json
+            trivy-image-secrets.json
+          if-no-files-found: error
+          retention-days: 5
+          overwrite: true
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [prepare, build, test, image-security]
+    timeout-minutes: 15
+    outputs:
+      image_digest: ${{ steps.release.outputs.image_digest }}
+    env:
+      CI_IMAGE: ${{ needs.prepare.outputs.ci_image }}
+      EXPECTED_IMAGE_ID: ${{ needs.build.outputs.image_id }}
+      VERIFIED_IMAGE_ID: ${{ needs.image-security.outputs.verified_image_id }}
+      IMAGE_TAG: ${{ needs.prepare.outputs.image_tag }}
+      SHA_TAG: ${{ needs.prepare.outputs.sha_tag }}
+    steps:
+      - name: Download the tested image
+        uses: actions/download-artifact@v4
+        with:
+          name: cw16a-weather-image
+
+      - name: Load the tested image without rebuilding
+        run: |
+          docker load -i image.tar
+          test "$(docker image inspect --format '{{.Id}}' "$CI_IMAGE")" = "$EXPECTED_IMAGE_ID"
+          # Integralność obrazu obowiązuje również przy tolerowaniu błędów skanerów.
+          test "$EXPECTED_IMAGE_ID" = "$VERIFIED_IMAGE_ID"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publish participant and SHA tags, then expose the digest
+        id: release
+        run: |
+          docker tag "$CI_IMAGE" "${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          docker tag "$CI_IMAGE" "${IMAGE_REPOSITORY}:${SHA_TAG}"
+          push_log="${RUNNER_TEMP}/cw16a-push.log"
+          docker push "${IMAGE_REPOSITORY}:${IMAGE_TAG}" 2>&1 | tee "$push_log"
+          image_digest="$(awk '$2 == "digest:" {print $3}' "$push_log" | sort -u)"
+          if ! [[ "$image_digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::Nie można odczytać jednoznacznego digestu opublikowanego obrazu."
+            exit 1
+          fi
+          docker push "${IMAGE_REPOSITORY}:${SHA_TAG}"
+          # Digest jest zwykłą metadaną. Tokenów ani loginu nie przekazujemy jako outputs.
+          echo "image_digest=$image_digest" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    runs-on: [self-hosted, linux]
+    needs: [prepare, publish]
+    timeout-minutes: 15
+    concurrency:
+      group: cw16a-deploy-${{ needs.prepare.outputs.container_name }}
+      cancel-in-progress: false
+    env:
+      CONTAINER_NAME: ${{ needs.prepare.outputs.container_name }}
+      APP_PORT: ${{ needs.prepare.outputs.app_port }}
+      WEATHER_CITY: ${{ needs.prepare.outputs.weather_city }}
+      IMAGE_TAG: ${{ needs.prepare.outputs.image_tag }}
+      IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
+    steps:
+      - name: Checkout the provided smoke test
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Prepare an isolated Docker credentials directory
+        run: |
+          task_docker_config="$(mktemp -d "${RUNNER_TEMP}/cw16a-docker-config.XXXXXX")"
+          chmod 700 "$task_docker_config"
+          echo "DOCKER_CONFIG=$task_docker_config" >> "$GITHUB_ENV"
+
+      - name: Log in to Docker Hub for deployment
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          logout: false
+
+      - name: Pull the published image by digest before replacing any container
+        run: |
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          docker pull "${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+
+      - name: Remove the exact previous deployment container if it exists
+        run: |
+          existing_container="$(docker container ls --all --quiet --filter "name=^/${CONTAINER_NAME}$")"
+          if [ -n "$existing_container" ]; then
+            docker rm --force "$existing_container"
+          fi
+
+      - name: Run the permanent restricted deployment container
+        env:
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        run: |
+          if [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "::error::Brak Repository secret OPENWEATHER_API_KEY."
+            exit 1
+          fi
+          docker run -d --name "$CONTAINER_NAME" --restart unless-stopped \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            -p "${APP_PORT}:8080" -e OPENWEATHER_API_KEY \
+            "${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+
+      - name: Verify the runtime security policy
+        run: |
+          test "$(docker exec "$CONTAINER_NAME" id -u)" != 0
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$CONTAINER_NAME")" = true
+          cap_drop="$(docker inspect --format '{{json .HostConfig.CapDrop}}' "$CONTAINER_NAME")"
+          security_opt="$(docker inspect --format '{{json .HostConfig.SecurityOpt}}' "$CONTAINER_NAME")"
+          [[ "$cap_drop" == *'"ALL"'* ]]
+          [[ "$security_opt" == *'"no-new-privileges:true"'* ]]
+
+      - name: Wait for the deployed API and produce a step output
+        id: ready
+        run: |
+          base_url="http://127.0.0.1:${APP_PORT}"
+          curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 \
+            --retry-max-time 60 --max-time 5 \
+            --output /dev/null "${base_url}/healthz"
+          test "$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME")" = true
+          echo "base_url=$base_url" >> "$GITHUB_OUTPUT"
+
+      - name: Test the deployed WWW and real API using the step output
+        env:
+          BASE_URL: ${{ steps.ready.outputs.base_url }}
+        run: |
+          python3 "${APP_DIR}/tests/smoke_test.py" \
+            --base-url "$BASE_URL" --city "$WEATHER_CITY"
+
+      - name: Summarize the verified deployment
+        env:
+          BASE_URL: ${{ steps.ready.outputs.base_url }}
+        run: |
+          {
+            echo "### CW16A — wdrożenie sprawdzone"
+            echo ""
+            echo "- Obraz: ${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+            echo "- Digest: $IMAGE_DIGEST"
+            echo "- Runner: self-hosted Linux"
+            echo "- Kontener: $CONTAINER_NAME"
+            echo "- Adres testu na runnerze: $BASE_URL"
+            echo "- Kontener działa z ograniczonymi uprawnieniami i pozostaje na hoście."
+            echo "- WWW: http://ADRES_TWOJEGO_RUNNERA:${APP_PORT}/"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show deployment container logs on failure
+        if: failure()
+        run: docker logs "$CONTAINER_NAME" || true
+
+      - name: Log out and remove temporary Docker Hub credentials
+        if: always()
+        run: |
+          case "${DOCKER_CONFIG:-}" in
+            "${RUNNER_TEMP}/cw16a-docker-config."*)
+              docker logout || true
+              rm -f -- "${DOCKER_CONFIG}/config.json"
+              rmdir -- "$DOCKER_CONFIG" 2>/dev/null || true
+              ;;
+            *) echo "Nie utworzono tymczasowego katalogu logowania Docker Hub." ;;
+          esac
