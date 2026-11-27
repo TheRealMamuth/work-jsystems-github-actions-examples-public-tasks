@@ -1,0 +1,287 @@
+# Ćwiczenie 02 — najpierw przygotuj i dodaj do Gita własne pliki .tf w:
+# CWICZENIA_TERRAFORM/cwiczenie02/terraform (instrukcja w cwiczenie02/README.md).
+# Nie odwołuj się do rozwiazanie_ukryte: ten katalog nie trafia do GitHub.
+# Settings → Secrets and variables → Actions:
+# Secret: DIGITALOCEAN_TOKEN — token zarządzający VM, VPC, firewallem i kluczami SSH.
+# Variables wymagane:
+#   VM_NAME = jan-kowalski-cw02-vm
+#   VPC_NAME = jan-kowalski-cw02-vpc
+#   FIREWALL_NAME = jan-kowalski-cw02-firewall
+#   VPC_CIDR = 10.33.35.0/24 — wolny zakres, niepokrywający się z innymi VPC.
+#   SSH_ALLOWED_CIDR = PUBLICZNY_IP_RUNNERA/32 (odczytaj ip a → eth0 na maszynie ćwiczeniowej).
+# Variables opcjonalne: DO_REGION=fra1, DO_VM_IMAGE=ubuntu-24-04-x64,
+#   DO_VM_SIZE=s-1vcpu-1gb, TF_STATE_ROOT=/home/student/terraform-state.
+# Bez TF_STATE_ROOT używamy $HOME/terraform-state konta usługi runnera.
+# Oba joby i kolejne uruchomienia MUSZĄ trafić na ten sam host z trwałym dyskiem.
+# W tym ćwiczeniu repozytorium ma jednego aktywnego runnera self-hosted Linux.
+# Akcje Node.js 24 wymagają runnera >= 2.327.1; zainstaluj aktualny runner.
+
+name: Terraform — ćwiczenie 02
+run-name: CW02 Terraform — ${{ inputs.operation }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Utwórz lub zaktualizuj zasoby albo usuń zasoby tego ćwiczenia
+        type: choice
+        required: true
+        default: apply
+        options:
+          - apply
+          - destroy
+
+permissions:
+  contents: read
+
+# Jeden przebieg repozytorium naraz; stan i znane klucze hostów są lokalne.
+concurrency:
+  group: terraform-cwiczenie02-${{ github.repository_id }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  TF_SOURCE_DIR: ./CWICZENIA_TERRAFORM/cwiczenie02/terraform
+  TERRAFORM_VERSION: '1.17.2'
+  TF_IN_AUTOMATION: 'true'
+  TF_INPUT: 'false'
+  TF_WORKSPACE: default
+
+jobs:
+  provision:
+    name: Terraform init, validate, plan i apply
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 25
+    outputs:
+      public_ip: ${{ steps.metadata.outputs.public_ip }}
+      private_key_path: ${{ steps.metadata.outputs.private_key_path }}
+      state_directory: ${{ steps.paths.outputs.state_directory }}
+      runner_name: ${{ steps.paths.outputs.runner_name }}
+    env:
+      DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+      TF_VAR_vm_name: ${{ vars.VM_NAME }}
+      TF_VAR_vpc_name: ${{ vars.VPC_NAME }}
+      TF_VAR_firewall_name: ${{ vars.FIREWALL_NAME }}
+      TF_VAR_vpc_cidr: ${{ vars.VPC_CIDR }}
+      TF_VAR_ssh_allowed_cidr: ${{ vars.SSH_ALLOWED_CIDR }}
+      TF_VAR_region: ${{ vars.DO_REGION || 'fra1' }}
+      TF_VAR_vm_image: ${{ vars.DO_VM_IMAGE || 'ubuntu-24-04-x64' }}
+      TF_VAR_vm_size: ${{ vars.DO_VM_SIZE || 's-1vcpu-1gb' }}
+    steps:
+      - name: Checkout konfiguracji ucznia
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Sprawdź dane i przygotuj trwały katalog poza checkoutem
+        id: paths
+        env:
+          REQUESTED_STATE_ROOT: ${{ vars.TF_STATE_ROOT }}
+          OPERATION: ${{ inputs.operation }}
+        run: |
+          set -euo pipefail
+          umask 077
+          case "$OPERATION" in
+            apply|destroy) ;;
+            *) echo "::error::Dozwolone operacje to apply i destroy."; exit 1 ;;
+          esac
+          for file in versions.tf variables.tf main.tf outputs.tf; do
+            if [ ! -f "${TF_SOURCE_DIR}/${file}" ]; then
+              echo "::error::Przygotuj i dodaj do Gita ${TF_SOURCE_DIR}/${file} zgodnie z instrukcją CW02."
+              exit 1
+            fi
+          done
+          for variable in TF_VAR_vm_name TF_VAR_vpc_name TF_VAR_firewall_name TF_VAR_vpc_cidr TF_VAR_ssh_allowed_cidr; do
+            if [ -z "${!variable}" ]; then
+              echo "::error::Uzupełnij Repository variables: VM_NAME, VPC_NAME, FIREWALL_NAME, VPC_CIDR i SSH_ALLOWED_CIDR."
+              exit 1
+            fi
+          done
+          if [ -z "$DIGITALOCEAN_TOKEN" ]; then
+            echo "::error::Utwórz Repository secret DIGITALOCEAN_TOKEN."
+            exit 1
+          fi
+          state_root="${REQUESTED_STATE_ROOT:-${HOME}/terraform-state}"
+          if [[ "$state_root" != /* || "$state_root" =~ [[:cntrl:]] ]]; then
+            echo "::error::TF_STATE_ROOT musi być bezwzględną ścieżką na trwałym dysku runnera, bez znaków sterujących."
+            exit 1
+          fi
+          state_root="$(realpath -m -- "$state_root")"
+          workspace="$(realpath -e -- "$GITHUB_WORKSPACE")"
+          runner_temporary="$(realpath -m -- "$RUNNER_TEMP")"
+          state_directory="$(realpath -m -- "${state_root}/cwiczenie02/${GITHUB_REPOSITORY_ID}")"
+          case "$state_directory/" in
+            "$workspace/"*|"$runner_temporary/"*)
+              echo "::error::Stan musi znajdować się poza checkoutem i katalogiem tymczasowym joba."
+              exit 1
+              ;;
+          esac
+          mkdir -p "${state_directory}/keys" "${state_directory}/plans"
+          chmod 700 "$state_directory" "${state_directory}/keys" "${state_directory}/plans"
+          state_file="${state_directory}/terraform.tfstate"
+          if [ "$OPERATION" = destroy ] && [ ! -s "$state_file" ]; then
+            echo "::error::Brak lokalnego state. Nie potwierdzam usunięcia zasobów bez ich stanu; sprawdź host i TF_STATE_ROOT."
+            exit 1
+          fi
+          if [ -f "${state_directory}/.initialized" ] && [ ! -s "$state_file" ]; then
+            echo "::error::Zniknął wcześniej używany state. Przywróć go przed kolejnym apply."
+            exit 1
+          fi
+          {
+            echo "STATE_DIRECTORY=$state_directory"
+            echo "STATE_FILE=$state_file"
+            echo "PLAN_FILE=${state_directory}/plans/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tfplan"
+            echo "TF_VAR_ssh_private_key_path=${state_directory}/keys/id_ed25519"
+          } >> "$GITHUB_ENV"
+          {
+            echo "state_directory=$state_directory"
+            echo "runner_name=$RUNNER_NAME"
+          } >> "$GITHUB_OUTPUT"
+          echo "Stan CW02 pozostaje na hoście runnera, poza checkoutem: $state_file"
+
+      - name: Zainstaluj Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform fmt
+        run: terraform -chdir="$TF_SOURCE_DIR" fmt -check
+
+      - name: Terraform init z lokalnym stanem na hoście
+        run: |
+          umask 077
+          terraform -chdir="$TF_SOURCE_DIR" init -input=false -reconfigure \
+            -backend-config="path=$STATE_FILE"
+
+      - name: Terraform validate
+        run: terraform -chdir="$TF_SOURCE_DIR" validate
+
+      - name: Terraform plan
+        env:
+          OPERATION: ${{ inputs.operation }}
+        run: |
+          umask 077
+          plan_arguments=()
+          if [ "$OPERATION" = destroy ]; then
+            plan_arguments+=(-destroy)
+          fi
+          terraform -chdir="$TF_SOURCE_DIR" plan -input=false \
+            "${plan_arguments[@]}" -out="$PLAN_FILE"
+          chmod 600 "$PLAN_FILE"
+
+      - name: Terraform apply zapisanego planu
+        run: |
+          umask 077
+          terraform -chdir="$TF_SOURCE_DIR" apply -input=false "$PLAN_FILE"
+          test -s "$STATE_FILE"
+          for file in "$STATE_FILE" "${STATE_FILE}.backup"; do
+            if [ -f "$file" ]; then
+              chmod 600 "$file"
+            fi
+          done
+          printf '%s\n' 'cwiczenie02' > "${STATE_DIRECTORY}/.initialized"
+
+      - name: Udostępnij IP i ścieżkę klucza, bez jego zawartości
+        id: metadata
+        if: ${{ inputs.operation == 'apply' }}
+        run: |
+          public_ip="$(terraform -chdir="$TF_SOURCE_DIR" output -raw public_ip)"
+          private_key_path="$(terraform -chdir="$TF_SOURCE_DIR" output -raw private_key_path)"
+          [[ "$public_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+          test "$private_key_path" = "${STATE_DIRECTORY}/keys/id_ed25519"
+          test -s "$private_key_path"
+          {
+            echo "public_ip=$public_ip"
+            echo "private_key_path=$private_key_path"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Podsumuj wynik Terraform
+        env:
+          OPERATION: ${{ inputs.operation }}
+          PUBLIC_IP: ${{ steps.metadata.outputs.public_ip }}
+        run: |
+          {
+            echo "### CW02 — Terraform $OPERATION"
+            echo ""
+            echo "- Runner: $RUNNER_NAME"
+            echo "- Lokalny state: $STATE_FILE"
+            if [ "$OPERATION" = apply ]; then
+              echo "- Publiczny IPv4 nowej VM: $PUBLIC_IP"
+              echo "- Porty publiczne TCP: 80, 443, 18000–18999"
+              echo "- SSH: 22 wyłącznie z adresu runnera; osobny job sprawdzi logowanie."
+            else
+              echo "- Usunięto zasoby z lokalnego state tego ćwiczenia."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Usuń tylko plan tego przebiegu, zachowaj state
+        if: always()
+        run: |
+          if [ -n "${PLAN_FILE:-}" ] && [ -n "${STATE_DIRECTORY:-}" ]; then
+            expected_plan="${STATE_DIRECTORY}/plans/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tfplan"
+            if [ "$PLAN_FILE" = "$expected_plan" ]; then
+              rm -f -- "$PLAN_FILE"
+            fi
+          fi
+
+  check-ssh:
+    name: Sprawdź rzeczywiste logowanie SSH kluczem TLS
+    needs: provision
+    if: ${{ inputs.operation == 'apply' }}
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 10
+    env:
+      PUBLIC_IP: ${{ needs.provision.outputs.public_ip }}
+      PRIVATE_KEY_PATH: ${{ needs.provision.outputs.private_key_path }}
+      STATE_DIRECTORY: ${{ needs.provision.outputs.state_directory }}
+      PROVISION_RUNNER_NAME: ${{ needs.provision.outputs.runner_name }}
+    steps:
+      - name: Sprawdź host oraz trwały plik klucza
+        run: |
+          set -euo pipefail
+          umask 077
+          if [ "$RUNNER_NAME" != "$PROVISION_RUNNER_NAME" ]; then
+            echo "::error::Oba joby wymagają tego samego runnera i dysku. Pozostaw jednego pasującego runnera albo skonfiguruj wspólną unikalną etykietę."
+            exit 1
+          fi
+          [[ "$PUBLIC_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+          test "$PRIVATE_KEY_PATH" = "${STATE_DIRECTORY}/keys/id_ed25519"
+          test -s "$PRIVATE_KEY_PATH"
+          test ! -L "$PRIVATE_KEY_PATH"
+          test "$(stat -c '%u' "$PRIVATE_KEY_PATH")" = "$(id -u)"
+          test "$(stat -c '%a' "$PRIVATE_KEY_PATH")" = 600
+          command -v ssh
+
+      - name: Poczekaj na SSH i wykonaj polecenia na nowej VM
+        run: |
+          umask 077
+          for attempt in $(seq 1 30); do
+            echo "Próba SSH ${attempt}/30 do $PUBLIC_IP"
+            if ssh -i "$PRIVATE_KEY_PATH" \
+              -o BatchMode=yes -o PasswordAuthentication=no -o IdentitiesOnly=yes \
+              -o ConnectTimeout=5 -o ConnectionAttempts=1 \
+              -o StrictHostKeyChecking=accept-new \
+              -o "UserKnownHostsFile=${STATE_DIRECTORY}/known_hosts" \
+              "root@${PUBLIC_IP}" \
+              'set -eu; test "$(id -u)" -eq 0; hostname; id; ip -4 address'; then
+              echo "SSH_OK — logowanie wygenerowanym kluczem i polecenia zdalne działają."
+              {
+                echo "### CW02 — test SSH zakończony sukcesem"
+                echo ""
+                echo "- VM: $PUBLIC_IP"
+                echo "- Użytkownik: root"
+                echo "- Uwierzytelnianie: klucz wygenerowany przez tls_private_key"
+                echo "- Runner: $RUNNER_NAME"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            if [ "$attempt" -lt 30 ]; then
+              sleep 5
+            fi
+          done
+          echo "::error::Nie udało się zalogować kluczem SSH. Sprawdź SSH_ALLOWED_CIDR, host runnera, firewall, klucz i known_hosts."
+          exit 1
