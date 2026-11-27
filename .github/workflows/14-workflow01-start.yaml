@@ -1,0 +1,23 @@
+name: 14-01-start-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - CW14
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: echo "Say Hello to my little friend" > output.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: output.txt

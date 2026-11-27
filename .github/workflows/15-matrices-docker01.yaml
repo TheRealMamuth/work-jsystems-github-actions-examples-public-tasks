@@ -1,0 +1,42 @@
+name: 15 - Docker matrix build
+
+on:
+  push:
+    branches:
+      - cw15
+  pull_request:
+    branches:
+      - cw15
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+    working-directory: ./CWICZENIA/15-matrices/docker01
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        env: [dev, staging, prod]
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Show current matrix entry
+        run: |
+          echo "Building for environment: ${{ matrix.env }}"
+
+      - name: Build Docker image (matrix)
+        run: |
+          docker build \
+            --build-arg APP_ENV=${{ matrix.env }} \
+            -t myapp:${{ matrix.env }} .
+
+      # Opcjonalnie – tylko żeby pokazać, że obraz faktycznie działa
+      - name: Run container and print message
+        run: |
+          docker run --rm myapp:${{ matrix.env }}
