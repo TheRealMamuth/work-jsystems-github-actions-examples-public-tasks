@@ -15,12 +15,12 @@ diagnostics() {
     cloud-init.service cloud-final.service apt-daily.service apt-daily-upgrade.service \
     docker.service nginx.service >&2 || true
   ps -eo pid,ppid,stat,etimes,comm |
-    awk 'NR == 1 || $5 ~ /^(apt|apt-get|dpkg|unattended|cloud-init)/' >&2 || true
+    awk 'NR == 1 || $5 ~ /^(apt|apt-get|dpkg|unattended|cloud-init|mandb|needrestart)/' >&2 || true
 }
 
 finish() {
   local status=$?
-  trap - EXIT INT TERM
+  trap - EXIT HUP INT TERM
   set +e
   if [ "$status" -ne 0 ]; then
     printf '[bootstrap] FAILED stage=%s exit=%s duration=%ss\n' \
@@ -31,6 +31,7 @@ finish() {
   exit "$status"
 }
 trap finish EXIT
+trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -80,11 +81,84 @@ if command -v cloud-init >/dev/null 2>&1; then
     0|2) ;;
     *) printf '%s\n' "$cloud_init_details" >&2; exit "$cloud_init_details_status" ;;
   esac
-  if ! printf '%s\n' "$cloud_init_details" | grep -Eq '^[[:space:]]*status:[[:space:]]+done([[:space:]]|$)'; then
+  if ! grep -Eq '^[[:space:]]*status:[[:space:]]+done([[:space:]]|$)' <<< "$cloud_init_details"; then
     printf '%s\n' "$cloud_init_details" >&2
     echo 'Cloud-init must finish before installing application services.' >&2
     exit 1
   fi
+fi
+
+# APT/dpkg use fcntl locks: never remove their files or use flock as a substitute.
+wait_for_package_locks() {
+  local busy lock_path locked_paths
+  while true; do
+    busy=0
+    if command -v fuser >/dev/null 2>&1; then
+      for lock_path in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock \
+        /var/lib/apt/lists/lock /var/cache/apt/archives/lock; do
+        if [ -e "$lock_path" ] && fuser -s "$lock_path"; then
+          busy=1
+        fi
+      done
+    elif command -v lslocks >/dev/null 2>&1; then
+      if ! locked_paths="$(lslocks --noheadings --notruncate --output PATH)"; then
+        echo '[bootstrap] Could not read package-manager locks.' >&2
+        return 1
+      fi
+      if grep -Eq '^[[:space:]]*/(var/lib/dpkg/lock(-frontend)?|var/lib/apt/lists/lock|var/cache/apt/archives/lock)[[:space:]]*$' <<< "$locked_paths"; then
+        busy=1
+      fi
+    else
+      echo '[bootstrap] Neither fuser nor lslocks is available; cannot safely check package-manager locks.' >&2
+      return 1
+    fi
+    if [ "$busy" -eq 0 ]; then
+      return 0
+    fi
+    echo '[bootstrap] Another package-manager process is active; waiting without removing its locks.' >&2
+    sleep 5
+  done
+}
+export -f wait_for_package_locks
+run_stage package-lock-wait 180 bash -c wait_for_package_locks
+
+# The observed apt-install timeout followed the man-db trigger message.
+# Preseed its supported setting before reconfiguring or resuming interrupted dpkg.
+export DEBIAN_FRONTEND=noninteractive
+run_stage man-db-preseed 30 debconf-set-selections <<<'man-db man-db/auto-update boolean false'
+current_stage='man-db-state'
+stage_started=$SECONDS
+man_db_state="$(dpkg-query -W '-f=${db:Status-Status}' man-db 2>/dev/null || true)"
+case "$man_db_state" in
+  installed|unpacked|half-configured|triggers-pending|triggers-awaited)
+    run_stage man-db-reconfigure 180 dpkg-reconfigure --frontend=noninteractive --force man-db
+    ;;
+esac
+current_stage='man-db-auto-update-check'
+stage_started=$SECONDS
+if [ -e /var/lib/man-db/auto-update ]; then
+  echo '[bootstrap] man-db automatic indexing is still enabled after reconfiguration; refusing to resume dpkg.' >&2
+  exit 1
+fi
+
+current_stage='dpkg-audit'
+stage_started=$SECONDS
+echo '[bootstrap] Checking for interrupted package configuration (limit=30s).' >&2
+if dpkg_audit="$(timeout --kill-after=5s 30 dpkg --audit 2>&1)"; then
+  :
+else
+  dpkg_audit_status=$?
+  printf '%s\n' "$dpkg_audit" >&2
+  exit "$dpkg_audit_status"
+fi
+# shellcheck disable=SC2016 # dpkg-query expands this format, not Bash.
+package_states="$(timeout --kill-after=5s 30 dpkg-query -W '-f=${db:Status-Status}\n')"
+if [ -n "$dpkg_audit" ] ||
+  grep -Eq '^(unpacked|half-configured|half-installed|triggers-pending|triggers-awaited)$' <<< "$package_states"; then
+  echo '[bootstrap] Resuming interrupted dpkg configuration with man-db indexing disabled.' >&2
+  run_stage dpkg-recovery 600 dpkg --configure -a
+else
+  echo '[bootstrap] No interrupted package configuration; skipping dpkg recovery.' >&2
 fi
 
 current_stage='package-check'
@@ -127,7 +201,7 @@ if [ "${#missing_packages[@]}" -gt 0 ]; then
     -o Dpkg::Options::=--force-confold
   )
   run_stage apt-update 300 apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
-  run_stage apt-install 600 apt-get "${apt_options[@]}" install -y --no-install-recommends "${missing_packages[@]}"
+  run_stage apt-install 600 apt-get "${apt_options[@]}" install -y --no-upgrade --no-install-recommends "${missing_packages[@]}"
 else
   echo '[bootstrap] All required packages are installed; skipping apt update/install.' >&2
 fi
