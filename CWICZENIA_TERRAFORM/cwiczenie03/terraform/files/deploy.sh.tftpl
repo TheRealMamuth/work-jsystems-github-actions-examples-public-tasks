@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+chmod 600 -- "$0"
+DOCKER_CONFIG=''
+nginx_candidate=''
+nginx_backup=''
+cleanup() {
+  task_status=$?
+  trap - EXIT
+  if [ -n "$DOCKER_CONFIG" ]; then
+    timeout 30 docker logout >/dev/null 2>&1 || true
+    rm -f -- "$DOCKER_CONFIG/config.json"
+    rmdir -- "$DOCKER_CONFIG" 2>/dev/null || true
+  fi
+  if [ -n "$nginx_candidate" ]; then
+    rm -f -- "$nginx_candidate"
+  fi
+  if [ -n "$nginx_backup" ]; then
+    rm -f -- "$nginx_backup"
+  fi
+  unset OPENWEATHER_API_KEY DOCKERHUB_TOKEN
+  rm -f -- "$0"
+  exit "$task_status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+OPENWEATHER_API_KEY="$(printf '%s' '${openweather_api_key_base64}' | base64 --decode)"
+DOCKERHUB_USERNAME="$(printf '%s' '${dockerhub_username_base64}' | base64 --decode)"
+DOCKERHUB_TOKEN="$(printf '%s' '${dockerhub_token_base64}' | base64 --decode)"
+IMAGE_REFERENCE='${image_reference}'
+CONTAINER_NAME='${container_name}'
+
+if [ -z "$OPENWEATHER_API_KEY" ] || [[ "$OPENWEATHER_API_KEY" =~ [[:cntrl:]] ]]; then
+  echo 'Pass a nonempty, single-line OpenWeather key through TF_VAR_openweather_api_key.' >&2
+  exit 1
+fi
+if [ -n "$DOCKERHUB_USERNAME" ] || [ -n "$DOCKERHUB_TOKEN" ]; then
+  if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+    echo 'Authenticated image pulls require both Docker Hub username and token.' >&2
+    exit 1
+  fi
+  DOCKER_CONFIG="$(mktemp -d /root/cw03-docker-config.XXXXXX)"
+  chmod 700 "$DOCKER_CONFIG"
+  export DOCKER_CONFIG
+  printf '%s' "$DOCKERHUB_TOKEN" | timeout 60 docker login \
+    --username "$DOCKERHUB_USERNAME" --password-stdin >/dev/null
+fi
+unset DOCKERHUB_TOKEN
+
+# A failed pull keeps the existing deployment container and Nginx proxy running.
+timeout 180 docker pull "$IMAGE_REFERENCE"
+# String equality also handles valid Docker names containing a dot literally.
+existing_container="$(docker container ls --all --format '{{.ID}} {{.Names}}' | awk -v expected="$CONTAINER_NAME" '$2 == expected {print $1}')"
+if [ -n "$existing_container" ]; then
+  docker rm --force "$existing_container"
+fi
+export OPENWEATHER_API_KEY
+docker run -d --name "$CONTAINER_NAME" --restart unless-stopped \
+  -p 127.0.0.1:18080:8080 -e OPENWEATHER_API_KEY "$IMAGE_REFERENCE"
+unset OPENWEATHER_API_KEY
+
+curl --fail --silent --show-error \
+  --retry 15 --retry-all-errors --retry-delay 2 \
+  --retry-max-time 60 --max-time 5 \
+  --output /dev/null http://127.0.0.1:18080/healthz
+test "$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME")" = true
+
+nginx_candidate="$(mktemp /etc/nginx/sites-available/.cw03-pogoda.XXXXXX)"
+cat > "$nginx_candidate" <<'NGINX'
+server {
+    listen 80 default_server;
+    server_name _;
+
+    location / {
+        proxy_pass http://127.0.0.1:18080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+NGINX
+chmod 644 "$nginx_candidate"
+nginx_backup="$(mktemp /etc/nginx/sites-available/.cw03-backup.XXXXXX)"
+cp -- /etc/nginx/sites-available/cw03-pogoda "$nginx_backup"
+mv -- "$nginx_candidate" /etc/nginx/sites-available/cw03-pogoda
+nginx_candidate=''
+rm -f -- /etc/nginx/sites-enabled/default
+ln -sfn /etc/nginx/sites-available/cw03-pogoda /etc/nginx/sites-enabled/cw03-pogoda
+if ! nginx -t; then
+  mv -- "$nginx_backup" /etc/nginx/sites-available/cw03-pogoda
+  nginx_backup=''
+  echo 'Nginx configuration validation failed; the previous owned configuration was restored.' >&2
+  exit 1
+fi
+rm -f -- "$nginx_backup"
+nginx_backup=''
+systemctl reload nginx
+curl --fail --silent --show-error \
+  --retry 15 --retry-all-errors --retry-delay 2 \
+  --retry-max-time 60 --max-time 5 \
+  --output /dev/null http://127.0.0.1/healthz
+echo 'Application container is running; Nginx serves its HTTP interface on port 80.'

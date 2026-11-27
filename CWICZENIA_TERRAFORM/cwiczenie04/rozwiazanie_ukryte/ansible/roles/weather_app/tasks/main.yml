@@ -1,0 +1,97 @@
+---
+- name: Sprawdź obecność dokładnego obrazu z digestem
+  community.docker.docker_image_info:
+    name: "{{ weather_image_reference }}"
+  register: weather_image_info
+  no_log: true
+
+- name: Pobierz brakujący obraz bez nowych danych logowania
+  community.docker.docker_image_pull:
+    name: "{{ weather_image_reference }}"
+    pull: not_present
+  when:
+    - weather_image_info.images | length == 0
+    - weather_dockerhub_username | length == 0
+
+- name: Pobierz brakujący obraz z odizolowanym logowaniem Docker Hub
+  when:
+    - not ansible_check_mode
+    - weather_image_info.images | length == 0
+    - weather_dockerhub_username | length > 0
+  block:
+    - name: Utwórz własny tymczasowy katalog konfiguracji Dockera
+      ansible.builtin.tempfile:
+        state: directory
+        path: /root
+        prefix: cw04-docker-auth-
+      register: weather_docker_auth_directory
+
+    - name: Ogranicz dostęp do własnego katalogu logowania
+      ansible.builtin.file:
+        path: "{{ weather_docker_auth_directory.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Utwórz pustą konfigurację bez odczytu cudzych danych logowania
+      ansible.builtin.copy:
+        dest: "{{ weather_docker_auth_directory.path }}/config.json"
+        content: '{"auths":{}}'
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Zaloguj do Docker Hub tylko we własnej konfiguracji
+      community.docker.docker_login:
+        registry_url: https://index.docker.io/v1/
+        username: "{{ weather_dockerhub_username }}"
+        password: "{{ weather_dockerhub_token }}"
+        config_path: "{{ weather_docker_auth_directory.path }}/config.json"
+      no_log: true
+      diff: false
+
+    - name: Pobierz dokładny obraz z tymczasowymi danymi logowania
+      community.docker.docker_image_pull:
+        name: "{{ weather_image_reference }}"
+        pull: not_present
+      environment:
+        DOCKER_CONFIG: "{{ weather_docker_auth_directory.path }}"
+      no_log: true
+      diff: false
+
+  always:
+    - name: Usuń wyłącznie własny tymczasowy katalog logowania
+      ansible.builtin.file:
+        path: "{{ weather_docker_auth_directory.path }}"
+        state: absent
+      when:
+        - weather_docker_auth_directory is defined
+        - weather_docker_auth_directory.path is defined
+        - weather_docker_auth_directory.path is match('^/root/cw04-docker-auth-[a-zA-Z0-9_]+$')
+      no_log: true
+
+- name: Uzgodnij uruchomiony kontener z kluczem API przekazanym podczas startu
+  community.docker.docker_container:
+    name: "{{ weather_container_name }}"
+    image: "{{ weather_image_reference }}"
+    pull: never
+    state: started
+    restart_policy: unless-stopped
+    published_ports:
+      - 127.0.0.1:18080:8080
+    env:
+      OPENWEATHER_API_KEY: "{{ openweather_api_key }}"
+  no_log: true
+  diff: false
+
+- name: Poczekaj na gotowość aplikacji na lokalnym porcie
+  ansible.builtin.uri:
+    url: http://127.0.0.1:18080/healthz
+    status_code: 200
+    use_proxy: false
+  register: weather_backend_health
+  until: weather_backend_health.status | default(0) == 200
+  retries: 20
+  delay: 3
+  when: not ansible_check_mode

@@ -1,0 +1,31 @@
+# Skopiuj do terraform.tfvars i wpisz własne imię/nazwisko w nazwach zasobów.
+vm_name       = "jan-kowalski-cw03-vm"
+vpc_name      = "jan-kowalski-cw03-vpc"
+firewall_name = "jan-kowalski-cw03-firewall"
+
+region   = "fra1"
+vm_image = "ubuntu-24-04-x64"
+vm_size  = "s-1vcpu-1gb"
+
+# Wybierz sieć niepokrywającą się z CW01, CW02 i innymi VPC na wspólnym koncie.
+vpc_cidr = "10.33.36.0/24"
+
+# To adres dokumentacyjny. ZASTĄP go publicznym IPv4 SELF-HOSTED RUNNERA /32.
+# SSH będzie wykonywane z runnera w osobnym jobie, a nie z laptopa ucznia.
+ssh_allowed_cidr = "203.0.113.10/32"
+
+# W pipeline nie wpisuj tutaj ścieżki: workflow przekaże ssh_private_key_path
+# do trwałego katalogu stanu poza checkoutem. Lokalny domyślny plik:
+# ssh_private_key_path = ".keys/id_ed25519"
+
+image_reference     = "piotrskoska/python_pogoda@sha256:ac30d995f5ca10e4c5db5c44d526398c435270ba1194c5987642f7179a224638"
+container_name      = "cw03-pogoda"
+deployment_revision = "1"
+
+# Opcjonalny publiczny login; token podawaj tylko przez TF_VAR_dockerhub_token.
+# dockerhub_username = "piotrskoska"
+# Klucz API podawaj tylko przez TF_VAR_openweather_api_key, nie przez tfvars.
+# Po zmianie sekretów zwiększ deployment_revision, aby ponowić provisioner.
+
+# Token API ustaw tylko przez zmienną środowiskową DIGITALOCEAN_TOKEN.
+# Nie dopisuj tokenu do tego pliku.

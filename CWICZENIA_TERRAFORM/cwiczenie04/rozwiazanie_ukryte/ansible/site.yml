@@ -1,0 +1,112 @@
+---
+- name: Przygotuj pogodę na jednym istniejącym hoście agenta
+  hosts: weather_agents
+  become: true
+  gather_facts: true
+
+  # Przykład: ansible-playbook site.yml --private-key ~/.ssh/klucz -e @vars.local.yml
+  # Zmienne z pliku pozostają jawne lokalnie; zadania z kluczem ukrywają logi.
+  module_defaults:
+    group/community.docker.docker:
+      docker_host: unix:///var/run/docker.sock
+
+  pre_tasks:
+    - name: Wymagaj jednego hosta Ubuntu lub Debian
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - ansible_facts.os_family == 'Debian'
+          - ansible_facts.distribution in ['Debian', 'Ubuntu']
+        fail_msg: Wskaż dokładnie jeden własny host agenta z Ubuntu lub Debian.
+
+    - name: Wymagaj jawnego IPv4 hosta w inventory
+      ansible.builtin.assert:
+        that:
+          - ansible_host is defined
+          - (ansible_host | default('')) is match('^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$')
+          - (ansible_host | default('') | split('.') | map('int') | max) <= 255
+          - ansible_host not in ['0.0.0.0', '127.0.0.1']
+        fail_msg: Ustaw ansible_host na rzeczywisty IPv4 swojego agenta.
+
+    - name: Sprawdź klucz API bez wypisywania jego wartości
+      ansible.builtin.assert:
+        that:
+          - openweather_api_key is defined
+          - (openweather_api_key | default('')) is string
+          - (openweather_api_key | default('') | trim | length) > 0
+          - (openweather_api_key | default('')) != 'UZUPELNIJ_AKTYWNY_KLUCZ_OPENWEATHER'
+          - (openweather_api_key | default('')) is not search('[\x00-\x20\x7f]')
+        fail_msg: Uzupełnij aktywny klucz OpenWeather w lokalnym vars.local.yml.
+      no_log: true
+
+    - name: Sprawdź opcjonalną parę danych Docker Hub
+      ansible.builtin.assert:
+        that:
+          - weather_dockerhub_username is string
+          - weather_dockerhub_token is string
+          - (weather_dockerhub_username | length > 0) == (weather_dockerhub_token | length > 0)
+          - weather_dockerhub_username is not search('[\x00-\x20\x7f]')
+          - weather_dockerhub_token is not search('[\x00-\x20\x7f]')
+        fail_msg: Dane Docker Hub pozostaw oba puste albo uzupełnij użytkownika i token.
+      no_log: true
+
+    - name: Sprawdź niesekretne parametry kontenera
+      ansible.builtin.assert:
+        that:
+          - weather_container_name is match('^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$')
+          - weather_image_reference is match('^[a-z0-9][a-z0-9._/-]*@sha256:[a-f0-9]{64}$')
+          - weather_city is string
+          - weather_city | length > 0
+          - weather_city | length <= 100
+          - weather_city is not search('[\x00-\x1f\x7f]')
+        fail_msg: Sprawdź nazwę kontenera, obraz z digestem sha256 oraz nazwę miasta.
+
+  roles:
+    - docker_runtime
+    - weather_app
+    - nginx_proxy
+
+  post_tasks:
+    - name: Odczytaj formularz WWW przez własny vhost
+      ansible.builtin.uri:
+        url: http://127.0.0.1/
+        headers:
+          Host: "{{ ansible_host }}"
+        return_content: true
+        status_code: 200
+        use_proxy: false
+      register: weather_web_response
+      when: not ansible_check_mode
+
+    - name: Potwierdź obecność formularza miasta
+      ansible.builtin.assert:
+        that:
+          - >-
+            'id="weather-form"' in weather_web_response.content
+        fail_msg: Vhost nie zwrócił formularza aplikacji pogodowej.
+      when: not ansible_check_mode
+
+    - name: Odczytaj rzeczywistą pogodę przez API i Nginx
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/api/weather?city={{ weather_city | urlencode }}"
+        headers:
+          Host: "{{ ansible_host }}"
+        return_content: true
+        status_code: 200
+        timeout: 20
+        use_proxy: false
+      register: weather_api_response
+      no_log: true
+      when: not ansible_check_mode
+
+    - name: Potwierdź dane rzeczywistego dostawcy pogody
+      ansible.builtin.assert:
+        that:
+          - weather_api_response.json.source | default('') == 'openweathermap'
+          - weather_api_response.json.units | default('') == 'metric'
+          - weather_api_response.json.temperature | default(none) is number
+          - weather_api_response.json.city | default('') is string
+          - weather_api_response.json.city | default('') | trim | length > 0
+        fail_msg: API nie potwierdziło rzeczywistej pogody z OpenWeatherMap. Sprawdź klucz, miasto i dostęp do dostawcy.
+      no_log: true
+      when: not ansible_check_mode

@@ -1,0 +1,13 @@
+---
+# Skopiuj do vars.local.yml, ustaw chmod 600 i uzupełnij aktywny klucz.
+# To jawny plik lokalny. Nie dodawaj vars.local.yml do Git.
+openweather_api_key: UZUPELNIJ_AKTYWNY_KLUCZ_OPENWEATHER
+
+weather_city: Warsaw
+weather_container_name: cw04-pogoda
+weather_image_reference: piotrskoska/python_pogoda@sha256:ac30d995f5ca10e4c5db5c44d526398c435270ba1194c5987642f7179a224638
+
+# Opcjonalnie: gdy obraz wymaga uwierzytelnienia, uzupełnij OBA pola.
+# Token ma mieć jedynie wymagane prawo odczytu obrazu.
+weather_dockerhub_username: ""
+weather_dockerhub_token: ""

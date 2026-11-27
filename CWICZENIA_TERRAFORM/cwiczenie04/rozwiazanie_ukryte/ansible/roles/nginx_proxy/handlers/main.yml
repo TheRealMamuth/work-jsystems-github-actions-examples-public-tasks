@@ -1,0 +1,10 @@
+---
+- name: Sprawdź składnię Nginxa przed przeładowaniem
+  ansible.builtin.command:
+    argv: [nginx, -t]
+  changed_when: false
+
+- name: Przeładuj konfigurację Nginxa
+  ansible.builtin.systemd_service:
+    name: nginx
+    state: reloaded

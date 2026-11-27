@@ -1,0 +1,55 @@
+---
+- name: Odczytaj zainstalowane pakiety
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Sprawdź istniejący Docker CLI
+  ansible.builtin.command:
+    argv: [docker, --version]
+  register: weather_docker_cli
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
+- name: Nie zastępuj niekompletnej instalacji Docker CE ani Moby
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (['docker-ce', 'docker-ce-cli', 'moby-engine', 'moby-cli'] |
+        intersect(ansible_facts.packages.keys() | list))
+    fail_msg: Istnieje instalacja Docker CE/Moby bez dostępnego CLI. Poproś prowadzącego o naprawę.
+  when: weather_docker_cli.rc != 0
+
+- name: Zainstaluj Docker tylko wtedy, gdy go brakuje
+  ansible.builtin.apt:
+    name: docker.io
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: weather_docker_cli.rc != 0
+
+- name: Zapewnij zależności modułów oraz diagnostyki HTTP
+  ansible.builtin.apt:
+    name:
+      - python3-requests
+      - ca-certificates
+      - curl
+      - iproute2
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Odczytaj istniejące usługi
+  ansible.builtin.service_facts:
+
+- name: Wymagaj systemowej usługi Docker
+  ansible.builtin.assert:
+    that:
+      - "'docker.service' in ansible_facts.services"
+    fail_msg: Nie znaleziono docker.service. Nie zastępuj istniejącej nietypowej instalacji bez prowadzącego.
+
+- name: Zapewnij uruchomiony Docker i start po restarcie hosta
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started

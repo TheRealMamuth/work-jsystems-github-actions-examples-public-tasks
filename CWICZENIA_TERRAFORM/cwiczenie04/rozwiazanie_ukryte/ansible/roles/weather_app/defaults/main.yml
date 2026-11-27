@@ -1,0 +1,6 @@
+---
+weather_image_reference: piotrskoska/python_pogoda@sha256:ac30d995f5ca10e4c5db5c44d526398c435270ba1194c5987642f7179a224638
+weather_container_name: cw04-pogoda
+weather_city: Warsaw
+weather_dockerhub_username: ""
+weather_dockerhub_token: ""

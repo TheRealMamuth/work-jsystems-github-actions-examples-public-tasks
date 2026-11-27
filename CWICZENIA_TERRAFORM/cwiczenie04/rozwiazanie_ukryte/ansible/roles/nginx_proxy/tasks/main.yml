@@ -1,0 +1,144 @@
+---
+- name: Odczytaj procesy nasłuchujące na porcie HTTP
+  ansible.builtin.command:
+    argv: [ss, -H, -ltnp, 'sport = :80']
+  register: weather_http_listeners
+  check_mode: false
+  changed_when: false
+
+- name: Nie zastępuj innego serwera HTTP na istniejącym agencie
+  ansible.builtin.assert:
+    that:
+      - item is search('"nginx"')
+    fail_msg: Port 80 zajmuje inny proces. Poproś prowadzącego o rozwiązanie konfliktu; playbook go nie zatrzymuje.
+  loop: "{{ weather_http_listeners.stdout_lines }}"
+  loop_control:
+    label: Port HTTP 80
+
+- name: Sprawdź istniejący Nginx bez zmiany jego konfiguracji
+  ansible.builtin.command:
+    argv: [nginx, -v]
+  register: weather_nginx_cli
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
+- name: Nie zastępuj niekompletnej istniejącej instalacji Nginxa
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (['nginx', 'nginx-core', 'nginx-full', 'nginx-light', 'nginx-extras'] |
+        intersect(ansible_facts.packages.keys() | list))
+    fail_msg: Pakiet Nginxa istnieje, ale program nie działa. Poproś prowadzącego o naprawę.
+  when: weather_nginx_cli.rc != 0
+
+- name: Zainstaluj Nginx tylko wtedy, gdy go brakuje
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: weather_nginx_cli.rc != 0
+
+- name: Odczytaj istniejące usługi po sprawdzeniu Nginxa
+  ansible.builtin.service_facts:
+
+- name: Wymagaj systemowej usługi Nginx
+  ansible.builtin.assert:
+    that:
+      - "'nginx.service' in ansible_facts.services"
+    fail_msg: Nie znaleziono nginx.service. Uzgodnij nietypową instalację z prowadzącym zamiast ją zastępować.
+
+- name: Sprawdź aktualną konfigurację Nginxa bez jej wyświetlania
+  ansible.builtin.command:
+    argv: [nginx, -T]
+  register: weather_nginx_configuration
+  check_mode: false
+  changed_when: false
+  no_log: true
+
+- name: Rozpocznij sprawdzenie istniejących nazw hostów
+  ansible.builtin.set_fact:
+    weather_nginx_conflicting_sites: []
+
+- name: Wykryj cudzy vhost z tym samym dokładnym IP
+  ansible.builtin.set_fact:
+    weather_nginx_conflicting_sites: "{{ weather_nginx_conflicting_sites + [item.0] }}"
+  loop: >-
+    {{ weather_nginx_configuration.stdout |
+    regex_findall('(?ms)^# configuration file ([^\n]+):\n(.*?)(?=^# configuration file |\Z)') }}
+  when:
+    - item.0 not in ['/etc/nginx/sites-enabled/cw04-pogoda', '/etc/nginx/sites-available/cw04-pogoda']
+    - >-
+      ansible_host in (item.1 | regex_findall('(?m)(?:^|[;{}])\s*server_name\s+([^;]+);') |
+      join(' ') | replace('"', '') | replace("'", '') | regex_findall('\\S+'))
+  no_log: true
+
+- name: Nie przejmuj istniejącego vhosta z IP tego agenta
+  ansible.builtin.assert:
+    that:
+      - weather_nginx_conflicting_sites | length == 0
+    fail_msg: "Istnieje vhost z tym samym IP: {{ weather_nginx_conflicting_sites | join(', ') }}. Uzgodnij zmianę z prowadzącym."
+
+- name: Sprawdź własną ścieżkę włączanego vhosta
+  ansible.builtin.stat:
+    path: /etc/nginx/sites-enabled/cw04-pogoda
+    follow: false
+  register: weather_nginx_enabled_site
+
+- name: Nie zastępuj innego pliku pod własną ścieżką vhosta
+  ansible.builtin.assert:
+    that:
+      - >-
+        not weather_nginx_enabled_site.stat.exists or
+        (weather_nginx_enabled_site.stat.islnk | default(false) and
+        weather_nginx_enabled_site.stat.lnk_source | default('') == '/etc/nginx/sites-available/cw04-pogoda')
+    fail_msg: Ścieżka sites-enabled/cw04-pogoda już zawiera inny plik. Uzgodnij konflikt z prowadzącym.
+
+- name: Zapisz wyłącznie własny vhost dla IP agenta
+  ansible.builtin.template:
+    src: cw04-pogoda.conf.j2
+    dest: /etc/nginx/sites-available/cw04-pogoda
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Sprawdź składnię Nginxa przed przeładowaniem
+    - Przeładuj konfigurację Nginxa
+
+- name: Włącz własny vhost bez usuwania pozostałych stron
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/cw04-pogoda
+    dest: /etc/nginx/sites-enabled/cw04-pogoda
+    state: link
+  notify:
+    - Sprawdź składnię Nginxa przed przeładowaniem
+    - Przeładuj konfigurację Nginxa
+
+- name: Sprawdź składnię także przy ponownym uruchomieniu playbooka
+  ansible.builtin.command:
+    argv: [nginx, -t]
+  check_mode: false
+  changed_when: false
+
+- name: Zapewnij uruchomiony Nginx i start po restarcie hosta
+  ansible.builtin.systemd_service:
+    name: nginx
+    enabled: true
+    state: started
+
+- name: Zastosuj zmienioną konfigurację przed testem HTTP
+  ansible.builtin.meta: flush_handlers
+
+- name: Sprawdź HTTP przez własny vhost Nginxa
+  ansible.builtin.uri:
+    url: http://127.0.0.1/healthz
+    headers:
+      Host: "{{ ansible_host }}"
+    status_code: 200
+    use_proxy: false
+  register: weather_proxy_health
+  until: weather_proxy_health.status | default(0) == 200
+  retries: 10
+  delay: 2
+  when: not ansible_check_mode

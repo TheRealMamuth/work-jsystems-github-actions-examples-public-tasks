@@ -1,0 +1,17 @@
+# Skopiuj do terraform.tfvars i wpisz własne imię/nazwisko w nazwach zasobów.
+vm_name       = "jan-kowalski-vm"
+vpc_name      = "jan-kowalski-vpc"
+firewall_name = "jan-kowalski-firewall"
+
+region   = "fra1"
+vm_image = "ubuntu-24-04-x64"
+vm_size  = "s-1vcpu-1gb"
+
+# Na wspólnym koncie wybierz niepokrywającą się sieć, np. 10.33.35.0/24.
+vpc_cidr = "10.33.34.0/24"
+
+# To adres dokumentacyjny. ZASTĄP go swoim aktualnym publicznym IPv4 z maską /32. sprawdzisz go przez ip a na swoim hoscie cwiczenowym VSC
+ssh_allowed_cidr = "203.0.113.10/32"
+
+# Token API ustaw tylko przez zmienną środowiskową DIGITALOCEAN_TOKEN.
+# Nie dopisuj tokenu do tego pliku.
